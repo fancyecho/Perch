@@ -17,6 +17,7 @@ struct RootView: View {
 /// final size and pinned to the anchor corner, so the card appears to unfold from the pill.
 private struct GlassCard: View {
     @Environment(PanelModel.self) private var model
+    @Environment(Feedback.self) private var feedback
 
     private var cornerRadius: CGFloat {
         switch model.mode {
@@ -41,6 +42,7 @@ private struct GlassCard: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: model.anchor)
+        .overlay { ConfettiRain(trigger: feedback.celebrationCount) }
         .clipShape(shape)
         .glassEffect(.regular, in: shape)
         .contentShape(shape)

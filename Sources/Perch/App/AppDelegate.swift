@@ -41,6 +41,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         resyncRemindersOnLocaleChange()
 
+        store.onComplete = { clearedToday, playsSound in
+            if playsSound { Feedback.shared.taskChecked() }
+            if clearedToday { Feedback.shared.todayCleared() }
+        }
+
         model.settingsHandler = { [weak self] in self?.showSettings() }
 
         let updater = Updater.shared

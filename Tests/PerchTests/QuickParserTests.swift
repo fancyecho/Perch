@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Testing
 @testable import Perch
@@ -179,6 +180,26 @@ struct TaskStoreTests {
         #expect(moved.map { ny.dateComponents([.day, .hour], from: $0) } == DateComponents(day: 8, hour: 9))
     }
 
+    @Test func rescheduleSetsAndClearsDateAndTime() {
+        let store = makeStore()
+        let cal = AppSettings.shared.calendar
+        let task = store.add(ParsedInput(title: "写周报"))!
+        #expect(store.task(task.id)?.schedule == nil)
+
+        let friday = Day(year: 2026, month: 10, day: 30)
+        store.reschedule(task.id, to: .day(friday))
+        #expect(store.task(task.id)?.schedule == .day(friday))
+
+        let afternoon = friday.date(hour: 15, minute: 30, in: cal)
+        store.reschedule(task.id, to: .time(afternoon))
+        #expect(store.task(task.id)?.schedule?.time == afternoon)
+        #expect(store.task(task.id)?.day(in: cal) == friday)
+
+        store.reschedule(task.id, to: nil)
+        #expect(store.task(task.id)?.schedule == nil)
+        #expect(store.inbox().map(\.id) == [task.id])
+    }
+
     @Test func legacyFormatStillDecodes() throws {
         let json = """
         {"id":"FBD242D1-579F-4F84-AB20-A3E438164D9B","title":"old","due":"2026-10-23T04:00:00Z","hasTime":true,"priority":2,"tags":[],"createdAt":"2026-10-23T03:00:00Z"}
@@ -197,5 +218,90 @@ struct UpdaterTests {
         #expect(Updater.isVersion("0.1.10", newerThan: "0.1.9"))
         #expect(!Updater.isVersion("0.1.0", newerThan: "0.1"))
         #expect(!Updater.isVersion("0.1.0", newerThan: "0.2.0"))
+    }
+}
+
+struct TimelineTests {
+    private let now = Date(timeIntervalSince1970: 1_800_000_000)
+
+    private func task(_ title: String, minutesFromNow: Double?) -> TaskItem {
+        TaskItem(title: title, schedule: minutesFromNow.map { .time(now.addingTimeInterval($0 * 60)) } ?? .day(Day(now, in: .current)))
+    }
+
+    private func describe(_ entries: [TodayTimeline.Entry]) -> [String] {
+        entries.map { entry in
+            switch entry.kind {
+            case .task(let task, let node): "\(task.title):\(node.above)/\(node.below)\(node.hint == nil ? "" : "*")"
+            case .now(let node): "now:\(node.above)/\(node.below)"
+            case .anytime(let node): "anytime:\(node.above)/\(node.below)"
+            }
+        }
+    }
+
+    @Test func ordersPastNowAheadThenAnytime() {
+        let entries = TodayTimeline.entries(for: [
+            task("later", minutesFromNow: 90),
+            task("whenever", minutesFromNow: nil),
+            task("earlier", minutesFromNow: -30),
+            task("soon", minutesFromNow: 20),
+        ], now: now)
+        #expect(describe(entries) == [
+            "earlier:none/elapsed",
+            "now:elapsed/ahead",
+            "soon:ahead/ahead*",
+            "later:ahead/anytime",
+            "anytime:anytime/anytime",
+            "whenever:anytime/none",
+        ])
+    }
+
+    @Test func untimedOnlyStartsAtNow() {
+        let entries = TodayTimeline.entries(for: [task("a", minutesFromNow: nil), task("b", minutesFromNow: nil)], now: now)
+        #expect(describe(entries) == ["now:none/anytime", "a:anytime/anytime", "b:anytime/none"])
+    }
+
+    @Test func allPastEndsAtNow() {
+        let entries = TodayTimeline.entries(for: [task("a", minutesFromNow: -60), task("b", minutesFromNow: -5)], now: now)
+        #expect(describe(entries) == ["a:none/elapsed", "b:elapsed/elapsed", "now:elapsed/none"])
+    }
+}
+
+struct FeedbackSoundTests {
+    @Test func synthesizedSoundsArePlayable() throws {
+        for style in ChimeStyle.allCases {
+            let sound = try #require(NSSound(data: SoundBank.chime(style)))
+            #expect(sound.duration > 0.02 && sound.duration < 2)
+            let fanfare = try #require(NSSound(data: SoundBank.fanfare(style)))
+            #expect(fanfare.duration > 0.3 && fanfare.duration < 3)
+        }
+    }
+
+    /// Decoding alone passes for pure silence, so check the samples actually carry sound.
+    @Test func synthesizedSoundsAreAudible() {
+        let sounds = ChimeStyle.allCases.flatMap { [SoundBank.chime($0), SoundBank.fanfare($0)] }
+        for wav in sounds {
+            let samples = wav.dropFirst(44).withUnsafeBytes { Array($0.bindMemory(to: Int16.self)) }
+            let peak = samples.map { abs(Int($0)) }.max() ?? 0
+            let loud = samples.filter { abs(Int($0)) > 1000 }.count
+            #expect(peak > 20_000)
+            // At least ~10 ms of clearly audible signal (Tink is a very short tap).
+            #expect(loud > Int(0.01 * ToneSynth.sampleRate))
+        }
+    }
+
+    /// The chime must start the instant it plays: no leading silence.
+    @Test func recordingsStartImmediately() throws {
+        for style in ChimeStyle.allCases where style.systemSound != nil {
+            let clip = try #require(Clip(contentsOf: style.systemSound!)).trimmingLeadingSilence()
+            let peak = clip.samples.map(abs).max() ?? 0
+            let onset = clip.samples.firstIndex { abs($0) > peak * 0.03 } ?? 0
+            #expect(Double(onset) / clip.sampleRate < 0.003)
+        }
+    }
+
+    @Test func pitchingUpShortensProportionally() {
+        let clip = Clip(samples: (0..<48_000).map { Float(sin(Double($0) * 0.05)) }, sampleRate: 48_000)
+        let up = clip.pitched(by: 12)
+        #expect(abs(up.samples.count - 24_000) <= 1)
     }
 }

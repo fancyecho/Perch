@@ -36,6 +36,7 @@ final class PanelController: NSObject, NSWindowDelegate {
             .environment(swipe)
             .environment(settings)
             .environment(Updater.shared)
+            .environment(Feedback.shared)
         let hosting = NSHostingView(rootView: root)
         hosting.sizingOptions = []
         panel.contentView = hosting
@@ -297,7 +298,9 @@ final class PanelController: NSObject, NSWindowDelegate {
             try? await Task.sleep(for: .seconds(delay))
             guard let self, !Task.isCancelled else { return }
             let defaults = UserDefaults.standard
-            let idle = defaults.bool(forKey: Pref.fadeWhenIdle) && !self.isMouseInsideCard && !self.panel.isKeyWindow
+            // An open popover (such as the date editor) is a child window: stay solid while it's up.
+            let hasPopover = self.panel.childWindows?.contains(where: \.isVisible) ?? false
+            let idle = defaults.bool(forKey: Pref.fadeWhenIdle) && !self.isMouseInsideCard && !self.panel.isKeyWindow && !hasPopover
             self.setAlpha(idle ? CGFloat(defaults.double(forKey: Pref.idleOpacity)) : 1, duration: 0.6)
         }
     }

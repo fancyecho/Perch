@@ -26,16 +26,27 @@ struct ProgressRing: View {
     var lineWidth: CGFloat = 3
     var showsCount = false
 
+    @Environment(Feedback.self) private var feedback
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     private var fraction: Double { total == 0 ? 0 : Double(done) / Double(total) }
     private var isComplete: Bool { total > 0 && done == total }
 
     var body: some View {
+        let popScale: CGFloat = reduceMotion ? 1 : 1.22
         ZStack {
             Circle().stroke(Color.primary.opacity(0.12), lineWidth: lineWidth)
             Circle()
                 .trim(from: 0, to: fraction)
-                .stroke(isComplete ? Color.green : Color.accentColor, style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
+                .stroke(
+                    isComplete ? AnyShapeStyle(Color.green) : AnyShapeStyle(AngularGradient(
+                        colors: [Color.accentColor.opacity(0.7), Color.accentColor],
+                        center: .center, startAngle: .zero, endAngle: .degrees(360 * max(fraction, 0.01))
+                    )),
+                    style: StrokeStyle(lineWidth: lineWidth, lineCap: .round)
+                )
                 .rotationEffect(.degrees(-90))
+                .shadow(color: (isComplete ? Color.green : Color.accentColor).opacity(isComplete ? 0.6 : 0), radius: 4)
             Group {
                 if isComplete {
                     Image(systemName: "checkmark")
@@ -53,6 +64,15 @@ struct ProgressRing: View {
                 }
             }
         }
+        // A small pop each time something gets done.
+        .keyframeAnimator(initialValue: 1.0, trigger: feedback.completionCount) { content, scale in
+            content.scaleEffect(scale)
+        } keyframes: { _ in
+            KeyframeTrack {
+                SpringKeyframe(popScale, duration: 0.14, spring: .snappy)
+                SpringKeyframe(1.0, duration: 0.4, spring: .bouncy)
+            }
+        }
         .animation(.spring(duration: 0.6, bounce: 0.2), value: fraction)
         .animation(.spring(duration: 0.4, bounce: 0.3), value: isComplete)
         .accessibilityElement()
@@ -60,7 +80,7 @@ struct ProgressRing: View {
     }
 }
 
-/// Round checkbox that fills with a spring and throws a little ripple when checked.
+/// Round checkbox: fills with a spring, draws its checkmark, and throws a ripple and a burst of sparks.
 struct CheckCircle: View {
     let isOn: Bool
     let tint: Color
@@ -68,6 +88,7 @@ struct CheckCircle: View {
     let action: () -> Void
 
     @State private var hovering = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private struct Ripple {
         var scale: CGFloat = 1
@@ -83,11 +104,11 @@ struct CheckCircle: View {
                     .fill(tint)
                     .scaleEffect(isOn ? 1 : 0.01)
                     .opacity(isOn ? 1 : 0)
-                Image(systemName: "checkmark")
-                    .font(.system(size: size * 0.5, weight: .heavy))
-                    .foregroundStyle(isOn ? Color.white : tint)
-                    .scaleEffect(isOn || hovering ? 1 : 0.4)
-                    .opacity(isOn ? 1 : hovering ? 0.55 : 0)
+                CheckmarkShape()
+                    .trim(from: 0, to: isOn ? 1 : (hovering ? 1 : 0))
+                    .stroke(isOn ? Color.white : tint.opacity(0.55), style: StrokeStyle(lineWidth: size * 0.12, lineCap: .round, lineJoin: .round))
+                    .frame(width: size * 0.5, height: size * 0.5)
+                    .animation(isOn ? .easeOut(duration: 0.28).delay(0.08) : .easeOut(duration: 0.12), value: isOn)
             }
             .frame(width: size, height: size)
             .background {
@@ -106,6 +127,9 @@ struct CheckCircle: View {
                         }
                     }
             }
+            .overlay {
+                if !reduceMotion { SparkBurst(isOn: isOn, tint: tint, radius: size * 1.5) }
+            }
             .padding(4)
             .contentShape(.circle)
         }
@@ -114,6 +138,123 @@ struct CheckCircle: View {
         .animation(.spring(duration: 0.32, bounce: 0.45), value: isOn)
         .animation(.easeOut(duration: 0.12), value: hovering)
         .accessibilityLabel(isOn ? tr("标记为未完成", "Mark as not done") : tr("完成", "Complete"))
+    }
+}
+
+nonisolated struct CheckmarkShape: Shape {
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        path.move(to: CGPoint(x: rect.minX + rect.width * 0.08, y: rect.minY + rect.height * 0.55))
+        path.addLine(to: CGPoint(x: rect.minX + rect.width * 0.4, y: rect.maxY - rect.height * 0.12))
+        path.addLine(to: CGPoint(x: rect.maxX - rect.width * 0.05, y: rect.minY + rect.height * 0.15))
+        return path
+    }
+}
+
+/// Eight sparks that fly out of the checkbox when it gets checked.
+private struct SparkBurst: View {
+    let isOn: Bool
+    let tint: Color
+    let radius: CGFloat
+
+    private static let count = 8
+
+    var body: some View {
+        ZStack {
+            ForEach(0..<Self.count, id: \.self) { index in
+                let angle = Angle.degrees(Double(index) / Double(Self.count) * 360 + 22.5)
+                Capsule()
+                    .fill(index.isMultiple(of: 2) ? tint : Color.accentColor.opacity(0.85))
+                    .frame(width: 2.5, height: index.isMultiple(of: 2) ? 6.5 : 4.5)
+                    .rotationEffect(angle + .degrees(90))
+                    .keyframeAnimator(initialValue: 0.0, trigger: isOn) { content, progress in
+                        content
+                            .offset(x: cos(angle.radians) * radius * progress, y: sin(angle.radians) * radius * progress)
+                            .opacity(isOn && progress > 0 && progress < 1 ? 1 - progress * progress : 0)
+                            .scaleEffect(1.2 - progress * 0.6)
+                    } keyframes: { _ in
+                        KeyframeTrack {
+                            LinearKeyframe(0, duration: 0.05)
+                            CubicKeyframe(0.6, duration: 0.18)
+                            CubicKeyframe(1, duration: 0.22)
+                        }
+                    }
+            }
+        }
+        .allowsHitTesting(false)
+    }
+}
+
+/// Confetti that rains down the panel when today's list is cleared.
+struct ConfettiRain: View {
+    let trigger: Int
+
+    @State private var startedAt: Date?
+    @State private var pieces: [Piece] = []
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private static let duration = 2.6
+    private static let palette: [Color] = [.accentColor, .pink, .yellow, .green, .purple, .orange, .cyan]
+
+    private struct Piece {
+        let x: Double
+        let delay: Double
+        let fallSpeed: Double
+        let swayAmount: Double
+        let swaySpeed: Double
+        let spin: Double
+        let size: CGSize
+        let color: Color
+        let isRound: Bool
+    }
+
+    var body: some View {
+        TimelineView(.animation(paused: startedAt == nil)) { context in
+            Canvas { canvas, size in
+                guard let startedAt else { return }
+                let elapsed = context.date.timeIntervalSince(startedAt)
+                for piece in pieces {
+                    let t = elapsed - piece.delay
+                    guard t > 0 else { continue }
+                    let y = -20 + piece.fallSpeed * t + 140 * t * t
+                    guard y < size.height + 20 else { continue }
+                    let x = piece.x * size.width + sin(t * piece.swaySpeed) * piece.swayAmount
+                    let fade = max(0, min(1, (Self.duration - elapsed) / 0.5))
+                    var layer = canvas
+                    layer.opacity = fade
+                    layer.translateBy(x: x, y: y)
+                    layer.rotate(by: .radians(t * piece.spin))
+                    // Flipping width fakes the paper turning over as it falls.
+                    let flip = abs(cos(t * piece.spin * 0.7))
+                    let rect = CGRect(x: -piece.size.width * flip / 2, y: -piece.size.height / 2,
+                                      width: piece.size.width * flip, height: piece.size.height)
+                    layer.fill(piece.isRound ? Path(ellipseIn: rect) : Path(roundedRect: rect, cornerRadius: 1.2), with: .color(piece.color))
+                }
+            }
+        }
+        .allowsHitTesting(false)
+        .onChange(of: trigger) {
+            guard !reduceMotion else { return }
+            pieces = (0..<70).map { _ in
+                Piece(
+                    x: .random(in: 0.02...0.98),
+                    delay: .random(in: 0...0.5),
+                    fallSpeed: .random(in: 60...170),
+                    swayAmount: .random(in: 6...22),
+                    swaySpeed: .random(in: 2...6),
+                    spin: .random(in: -9...9),
+                    size: CGSize(width: .random(in: 5...8), height: .random(in: 8...12)),
+                    color: Self.palette.randomElement() ?? .accentColor,
+                    isRound: Int.random(in: 0..<5) == 0
+                )
+            }
+            startedAt = .now
+            let started = startedAt
+            Task {
+                try? await Task.sleep(for: .seconds(Self.duration))
+                if startedAt == started { startedAt = nil; pieces = [] }
+            }
+        }
     }
 }
 

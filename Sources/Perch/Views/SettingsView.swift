@@ -7,6 +7,10 @@ struct SettingsView: View {
     @AppStorage(Pref.peekOnHover) private var peekOnHover = true
     @AppStorage(Pref.fadeWhenIdle) private var fadeWhenIdle = true
     @AppStorage(Pref.idleOpacity) private var idleOpacity = 0.6
+    @AppStorage(Pref.todayTimeline) private var showsTimeline = true
+    @AppStorage(Pref.completionSound) private var completionSound = true
+    @AppStorage(Pref.celebrations) private var celebrations = true
+    @AppStorage(Pref.chimeStyle) private var chimeStyle = ChimeStyle.perch.rawValue
     @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
     @State private var loginError: String?
 
@@ -33,6 +37,37 @@ struct SettingsView: View {
                 LabeledContent(tr("唤出 / 收起", "Show / hide")) {
                     HotKeyRecorder()
                 }
+            }
+
+            Section(tr("体验", "Experience")) {
+                Toggle(tr("「今天」显示时间轴", "Show timeline in Today"), isOn: $showsTimeline)
+                Toggle(tr("完成音效", "Completion sound"), isOn: $completionSound)
+                if completionSound {
+                    LabeledContent(tr("音色", "Sound")) {
+                        HStack(spacing: 8) {
+                            Picker("", selection: $chimeStyle) {
+                                Text(tr("嘀嗒（默认）", "Di-da (default)")).tag(ChimeStyle.perch.rawValue)
+                                Text(tr("Apple Pay 原声", "Apple Pay")).tag(ChimeStyle.applePay.rawValue)
+                                Text(tr("玻璃", "Glass")).tag(ChimeStyle.glass.rawValue)
+                                Text(tr("轻敲", "Tink")).tag(ChimeStyle.tink.rawValue)
+                                Text(tr("木塞", "Bottle")).tag(ChimeStyle.bottle.rawValue)
+                                Text(tr("木琴", "Marimba")).tag(ChimeStyle.marimba.rawValue)
+                            }
+                            .labelsHidden()
+                            .fixedSize()
+                            .onChange(of: chimeStyle) { _, style in
+                                Feedback.shared.preview(ChimeStyle(rawValue: style))
+                            }
+                            Button {
+                                Feedback.shared.preview()
+                            } label: {
+                                Image(systemName: "play.fill")
+                            }
+                            .help(tr("试听", "Preview"))
+                        }
+                    }
+                }
+                Toggle(tr("清空今天时撒彩带", "Confetti when today is cleared"), isOn: $celebrations)
             }
 
             Section(tr("窗口", "Window")) {

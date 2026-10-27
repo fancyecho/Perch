@@ -11,6 +11,9 @@ Perch 是一个轻量的 macOS 原生待办浮窗（SwiftUI + AppKit，无第三
 - **三种形态**：胶囊 → 悬停预览 → 完整面板，从胶囊所在的角弹性展开；拖动后自动吸附屏幕边缘
 - **自然语言输入**：`明天下午3点 写周报 !! #工作`、`下周三 交报告`、`call mom tomorrow 5pm p1`
 - **手势**：在任务上触控板向右扫或鼠标向右拖完成，向左推迟到明天；双击编辑，右键更多
+- **随时改时间**：点任务的日期、时间轴上的时间或悬停出现的日历按钮，用月历、时间开关、常用时刻或直接输入「后天下午3点」修改
+- **今天时间轴**：任务按时间串在一条线上，「现在」标记实时走动，已过去的一段逐渐着色（可在设置里关闭）
+- **完成的小奖励**：清脆的「嘀嗒」提示音（可换音色）、勾选火花、进度环弹跳，清空今天时撒彩带
 - **专注模式**、撤销、闲置淡化、到点通知
 - **全局快捷键**可自定义（默认 `⌥ Space`）
 - **中文 / English** 界面实时切换；**时区**可选，正确处理夏令时
@@ -62,9 +65,9 @@ swift test
 更新包用 Ed25519 签名，私钥只保存在维护者本机（默认 `~/.config/perch/update_ed25519.key`，**务必备份**，丢失后旧版本将无法验证新的更新），公钥写在 `Resources/Info.plist` 的 `PerchUpdatePublicKey`。
 
 1. 首次：`swift scripts/sign-update.swift --generate`，把输出的公钥填进 Info.plist。
-2. 写好 `docs/releases/<版本号>.md`，提交所有改动。
+2. 把 `Resources/Info.plist` 的 `CFBundleShortVersionString` 改成新版本号，写好 `docs/releases/<版本号>.md`，提交并推送。
 3. 执行：
    ```bash
    scripts/release.sh 0.2.0 --publish
    ```
-   脚本会更新版本号、构建、打包 `Perch-0.2.0.zip`、生成签名 `.sig`，并创建 GitHub Release `v0.2.0`。版本号改动会留在工作区，记得随后提交。
+   脚本会核对版本号、构建、写入构建号、打包 `Perch-0.2.0.zip`、生成签名 `.sig`，并在当前提交上创建 GitHub Release `v0.2.0`，不会改动工作区。

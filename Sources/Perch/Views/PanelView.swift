@@ -41,6 +41,7 @@ private struct PanelHeader: View {
     @Environment(Updater.self) private var updater
     @AppStorage(Pref.pinned) private var pinned = true
     @AppStorage(Pref.peekOnHover) private var peekOnHover = true
+    @AppStorage(Pref.todayTimeline) private var showsTimeline = true
 
     var body: some View {
         let progress = store.progress(now: now)
@@ -63,6 +64,7 @@ private struct PanelHeader: View {
                 }
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)
+                .lineLimit(1)
             }
             Spacer()
             ProgressRing(done: progress.done, total: progress.total, lineWidth: 3.5, showsCount: true)
@@ -71,6 +73,10 @@ private struct PanelHeader: View {
             Menu {
                 Toggle(tr("始终置顶", "Always on Top"), isOn: $pinned)
                 Toggle(tr("悬停预览", "Peek on Hover"), isOn: $peekOnHover)
+                Toggle(tr("今天时间轴", "Today Timeline"), isOn: Binding(
+                    get: { showsTimeline },
+                    set: { value in withAnimation(.snappy) { showsTimeline = value } }
+                ))
                 Divider()
                 if let release = updater.availableRelease {
                     Button(tr("更新到 \(release.version)", "Update to \(release.version)")) {
@@ -107,7 +113,7 @@ private struct PanelHeader: View {
     private func summary(_ progress: (done: Int, total: Int)) -> String {
         let remaining = progress.total - progress.done
         if progress.total == 0 { return tr("今天没有安排", "Nothing planned") }
-        if remaining == 0 { return tr("全部完成，干得漂亮", "All done, nice work") }
+        if remaining == 0 { return tr("全部完成，真棒", "All done, nice") }
         return tr("还剩 \(remaining) 项", "\(remaining) left")
     }
 }
@@ -331,6 +337,7 @@ private struct TaskList: View {
     let tab: TaskTab
     let now: Date
     @Environment(TaskStore.self) private var store
+    @AppStorage(Pref.todayTimeline) private var showsTimeline = true
     @State private var showsDoneToday = false
 
     var body: some View {
@@ -370,7 +377,13 @@ private struct TaskList: View {
         }
         if !due.isEmpty {
             if !overdue.isEmpty { SectionHeader(title: tr("今天", "Today")) }
-            rows(due)
+            if showsTimeline {
+                // TodayTimeline's body is a ForEach, so a modifier on it would land on every row.
+                if overdue.isEmpty { Color.clear.frame(height: 6) }
+                TodayTimeline(tasks: due, now: now)
+            } else {
+                rows(due)
+            }
         }
         if !doneToday.isEmpty {
             Button {

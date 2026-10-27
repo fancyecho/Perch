@@ -8,9 +8,12 @@ struct TaskRow: View {
     var style: Style = .regular
     /// Off when a section header already names the day.
     var showsDay = true
+    /// Set when the row sits on the Today timeline.
+    var timeline: TimelineNode?
 
     @Environment(TaskStore.self) private var store
     @Environment(SwipeTracker.self) private var swipe
+    @Environment(Feedback.self) private var feedback
     @State private var hovering = false
     @State private var completing = false
     @GestureState(resetTransaction: Transaction(animation: .spring(duration: 0.35, bounce: 0.25)))
@@ -18,6 +21,7 @@ struct TaskRow: View {
     @State private var isEditing = false
     @State private var draft = ""
     @State private var editorFocusRequest = 0
+    @State private var editingSchedule = false
 
     private var offset: CGFloat { (swipe.rowID == task.id ? swipe.offset : 0) + dragOffset }
     private var isChecked: Bool { task.isDone || completing }
@@ -29,6 +33,9 @@ struct TaskRow: View {
             content
                 .offset(x: offset)
         }
+        .background {
+            if let timeline { TimelineTrack(node: timeline, nodeRadius: 12) }
+        }
         .clipShape(.rect(cornerRadius: 10, style: .continuous))
         .contentShape(.rect)
         .onHover { hovering in
@@ -37,13 +44,18 @@ struct TaskRow: View {
         }
         .simultaneousGesture(dragToSwipe)
         .onChange(of: abs(offset) >= SwipeTracker.threshold) { Haptics.tick() }
-        .contextMenu { TaskMenu(task: task, onEdit: beginEditing) }
+        .contextMenu { TaskMenu(task: task, onEdit: beginEditing, onSchedule: { editingSchedule = true }) }
     }
 
     // MARK: - Content
 
     private var content: some View {
         HStack(spacing: style == .compact ? 6 : 8) {
+            if let timeline {
+                TimelineLabel(node: timeline)
+                    .contentShape(.rect)
+                    .onTapGesture { if style == .regular && !isChecked { editingSchedule = true } }
+            }
             CheckCircle(isOn: isChecked, tint: task.priority.tint, size: style == .compact ? 16 : 18, action: toggle)
 
             VStack(alignment: .leading, spacing: 2) {
@@ -76,8 +88,12 @@ struct TaskRow: View {
                         .font(.system(size: 11).monospacedDigit())
                         .foregroundStyle(DateText.isOverdue(task, now: now) ? Color.red : .secondary)
                 }
-            } else if hovering && !isChecked && !isEditing {
-                hoverActions.transition(.opacity)
+            } else {
+                // A fixed slot, so the title never re-wraps when the button fades in.
+                let showsButton = (hovering && !isChecked && !isEditing) || editingSchedule
+                rescheduleButton
+                    .opacity(showsButton ? 1 : 0)
+                    .allowsHitTesting(showsButton)
             }
         }
         .padding(.vertical, style == .compact ? 4 : 6)
@@ -93,16 +109,23 @@ struct TaskRow: View {
     @ViewBuilder
     private var metadata: some View {
         let dueLabel = DateText.dueLabel(task, now: now)
-        if dueLabel != nil || !task.tags.isEmpty || isFocusTask {
+        if (dueLabel != nil && timeline == nil) || !task.tags.isEmpty || isFocusTask {
             HStack(spacing: 8) {
                 if isFocusTask {
                     Label(tr("专注中", "Focusing"), systemImage: "scope")
                         .foregroundStyle(Color.accentColor)
                 }
-                if let dueLabel = showsDay ? dueLabel : task.schedule?.time.map(DateText.time),
+                if timeline == nil,
+                   let dueLabel = showsDay ? dueLabel : task.schedule?.time.map(DateText.time),
                    task.hasTime || (showsDay && !DateText.isDueToday(task, now: now)) {
-                    Label(dueLabel, systemImage: task.hasTime ? "clock" : "calendar")
-                        .foregroundStyle(DateText.isOverdue(task, now: now) ? Color.red : .secondary)
+                    Button { editingSchedule = true } label: {
+                        Label(dueLabel, systemImage: task.hasTime ? "clock" : "calendar")
+                            .foregroundStyle(DateText.isOverdue(task, now: now) ? Color.red : .secondary)
+                            .contentShape(.rect)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(isChecked)
+                    .help(tr("修改日期和时间", "Change date and time"))
                 }
                 ForEach(task.tags, id: \.self) { tag in
                     Text("#\(tag)").foregroundStyle(Color.accentColor.opacity(0.9))
@@ -114,28 +137,20 @@ struct TaskRow: View {
         }
     }
 
-    private var hoverActions: some View {
-        HStack(spacing: 0) {
-            if !isFocusTask {
-                IconButton(symbol: "scope", help: tr("开始专注", "Start focus"), size: 22) {
-                    withAnimation(.snappy) { store.startFocus(task.id) }
-                }
-            }
-            Menu {
-                ScheduleMenuItems(task: task)
-            } label: {
-                Image(systemName: "calendar")
-                    .font(.system(size: 12, weight: .semibold))
-                    .frame(width: 22, height: 22)
-                    .contentShape(.circle)
-            }
-            .menuStyle(.button)
-            .buttonStyle(.plain)
-            .menuIndicator(.hidden)
-            .fixedSize()
-            .help(tr("改期", "Reschedule"))
+    private var rescheduleButton: some View {
+        Button { editingSchedule.toggle() } label: {
+            Image(systemName: task.hasTime ? "clock" : "calendar")
+                .font(.system(size: 12, weight: .semibold))
+                .frame(width: 22, height: 22)
+                .background(Circle().fill(Color.primary.opacity(editingSchedule ? 0.1 : 0)))
+                .contentShape(.circle)
         }
-        .foregroundStyle(.secondary)
+        .buttonStyle(.plain)
+        .foregroundStyle(editingSchedule ? Color.accentColor : .secondary)
+        .help(tr("修改日期和时间", "Change date and time"))
+        .popover(isPresented: $editingSchedule, arrowEdge: .bottom) {
+            ScheduleEditor(taskID: task.id)
+        }
     }
 
     private var swipeReveal: some View {
@@ -186,11 +201,12 @@ struct TaskRow: View {
         }
         guard !completing else { return }
         Haptics.confirm()
+        feedback.taskChecked()
         completing = true
         let id = task.id
         Task {
-            try? await Task.sleep(for: .milliseconds(480))
-            withAnimation(.snappy(duration: 0.35)) { store.complete(id) }
+            try? await Task.sleep(for: .milliseconds(520))
+            withAnimation(.snappy(duration: 0.35)) { store.complete(id, playsSound: false) }
         }
     }
 
@@ -238,6 +254,7 @@ struct ScheduleMenuItems: View {
 struct TaskMenu: View {
     let task: TaskItem
     let onEdit: () -> Void
+    let onSchedule: () -> Void
     @Environment(TaskStore.self) private var store
 
     var body: some View {
@@ -251,6 +268,7 @@ struct TaskMenu: View {
                 Button(tr("开始专注", "Start Focus")) { withAnimation(.snappy) { store.startFocus(task.id) } }
             }
             Button(tr("编辑标题", "Edit Title"), action: onEdit)
+            Button(tr("修改日期和时间…", "Change Date & Time…"), action: onSchedule)
             Divider()
             Menu(tr("日期", "Date")) { ScheduleMenuItems(task: task) }
             Menu(tr("优先级", "Priority")) {

@@ -24,6 +24,8 @@ final class TaskStore {
     var notice: Notice?
 
     @ObservationIgnored var onChange: (() -> Void)?
+    /// Called after a completion; `clearedToday` is true when nothing is left for today.
+    @ObservationIgnored var onComplete: ((_ clearedToday: Bool, _ playsSound: Bool) -> Void)?
     @ObservationIgnored private var saveTask: Task<Void, Never>?
     @ObservationIgnored private let fileURL: URL
 
@@ -59,13 +61,17 @@ final class TaskStore {
         return item
     }
 
-    func complete(_ id: UUID) {
+    /// `playsSound` is false when the caller already gave feedback (the checkbox does, at click time).
+    func complete(_ id: UUID, playsSound: Bool = true) {
         guard let task = task(id), !task.isDone else { return }
         let snapshot = currentSnapshot
+        let wasForToday = task.day(in: calendar).map { $0 <= Day(.now, in: calendar) } ?? false
         update(id) { $0.completedAt = .now }
         if focus?.taskID == id { focus = nil }
         announce(tr("已完成「\(task.title)」", "Completed “\(task.title)”"), undo: snapshot)
         changed()
+        let progress = progress(now: .now)
+        onComplete?(wasForToday && progress.done == progress.total, playsSound)
     }
 
     func reopen(_ id: UUID) {
@@ -86,6 +92,13 @@ final class TaskStore {
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         update(id) { $0.title = trimmed }
+        changed()
+    }
+
+    /// Sets a task's date and time outright (nil moves it to the Inbox).
+    func reschedule(_ id: UUID, to schedule: Schedule?) {
+        guard task(id)?.schedule != schedule else { return }
+        update(id) { $0.schedule = schedule }
         changed()
     }
 
