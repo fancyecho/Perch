@@ -1,0 +1,235 @@
+import CoreBluetooth
+import Foundation
+import IOBluetooth
+import IOKit
+import Observation
+
+nonisolated struct BluetoothBattery: Equatable, Sendable {
+    var single: Int?
+    var left: Int?
+    var right: Int?
+    var caseLevel: Int?
+
+    /// Both earbuds, or the device itself: whichever is lower, since that is what runs out first.
+    var main: Int? {
+        if let single { return single }
+        switch (left, right) {
+        case let (left?, right?): return min(left, right)
+        case let (left?, nil): return left
+        case let (nil, right?): return right
+        case (nil, nil): return nil
+        }
+    }
+
+    var isEmpty: Bool { main == nil && caseLevel == nil }
+}
+
+nonisolated struct BluetoothDevice: Identifiable, Equatable, Sendable {
+    let id: String
+    var name: String
+    var symbol: String
+    var battery: BluetoothBattery
+}
+
+/// Connected Bluetooth devices with their battery levels, and word of every connect and disconnect.
+/// IOBluetooth asks for Bluetooth permission the first time this starts.
+@Observable
+final class BluetoothMonitor: NSObject {
+    private(set) var devices: [BluetoothDevice] = []
+
+    @ObservationIgnored var onConnect: ((BluetoothDevice) -> Void)?
+    @ObservationIgnored var onDisconnect: ((BluetoothDevice) -> Void)?
+
+    @ObservationIgnored private var connectNotification: IOBluetoothUserNotification?
+    @ObservationIgnored private var disconnectNotifications: [String: IOBluetoothUserNotification] = [:]
+    @ObservationIgnored private var startedAt = Date.distantPast
+    @ObservationIgnored private var batteryTasks: [String: Task<Void, Never>] = [:]
+    @ObservationIgnored private var startTask: Task<Void, Never>?
+
+    /// Without a usage description macOS kills the process on first use, as with a bare `swift run`.
+    static var isUsable: Bool {
+        Bundle.main.object(forInfoDictionaryKey: "NSBluetoothAlwaysUsageDescription") != nil
+    }
+
+    func start() {
+        guard connectNotification == nil, startTask == nil, Self.isUsable else { return }
+        startTask = Task { [weak self] in
+            let allowed = await Self.prepare()
+            guard let self, !Task.isCancelled else { return }
+            self.startTask = nil
+            guard allowed else { return }
+            self.startedAt = .now
+            self.connectNotification = IOBluetoothDevice.register(forConnectNotifications: self, selector: #selector(self.deviceConnected(_:device:)))
+        }
+    }
+
+    /// IOBluetooth sets itself up on first use and blocks until the Bluetooth permission prompt is
+    /// answered, so make that first use here, off the main thread.
+    @concurrent
+    nonisolated private static func prepare() async -> Bool {
+        if CBManager.authorization == .denied || CBManager.authorization == .restricted { return false }
+        let selector = NSSelectorFromString("sharedInstance")
+        if let coordinator = NSClassFromString("IOBluetoothCoreBluetoothCoordinator") as? NSObject.Type,
+           coordinator.responds(to: selector) {
+            _ = coordinator.perform(selector)
+        }
+        return CBManager.authorization == .allowedAlways
+    }
+
+    func stop() {
+        startTask?.cancel()
+        startTask = nil
+        connectNotification?.unregister()
+        connectNotification = nil
+        disconnectNotifications.values.forEach { $0.unregister() }
+        disconnectNotifications = [:]
+        batteryTasks.values.forEach { $0.cancel() }
+        batteryTasks = [:]
+        devices = []
+    }
+
+    /// Re-reads every battery, for when the levels are about to be on screen.
+    func refreshBatteries() {
+        for device in devices {
+            guard let bluetooth = IOBluetoothDevice(addressString: device.id) else { continue }
+            update(Self.describe(bluetooth, id: device.id))
+        }
+    }
+
+    // IOBluetooth calls these on CoreBluetooth's own queue, not the main thread: read what's needed
+    // there, then carry on on the main actor.
+    @objc nonisolated private func deviceConnected(_ notification: IOBluetoothUserNotification, device: IOBluetoothDevice) {
+        guard let address = device.addressString else { return }
+        let info = Self.describe(device, id: address)
+        Task { @MainActor [weak self] in self?.connected(info) }
+    }
+
+    @objc nonisolated private func deviceDisconnected(_ notification: IOBluetoothUserNotification, device: IOBluetoothDevice) {
+        guard let address = device.addressString else { return }
+        let fallback = Self.describe(device, id: address)
+        Task { @MainActor [weak self] in self?.disconnected(address, fallback: fallback) }
+    }
+
+    private func connected(_ info: BluetoothDevice) {
+        guard connectNotification != nil, let device = IOBluetoothDevice(addressString: info.id) else { return }
+        disconnectNotifications[info.id]?.unregister()
+        disconnectNotifications[info.id] = device.register(forDisconnectNotification: self, selector: #selector(deviceDisconnected(_:device:)))
+        update(info)
+        // Registering reports the devices that were already connected; those aren't news.
+        if Date.now.timeIntervalSince(startedAt) > 2 { onConnect?(info) }
+        followBattery(of: info.id)
+    }
+
+    private func disconnected(_ address: String, fallback: BluetoothDevice) {
+        disconnectNotifications.removeValue(forKey: address)?.unregister()
+        batteryTasks.removeValue(forKey: address)?.cancel()
+        let info = devices.first { $0.id == address } ?? fallback
+        devices.removeAll { $0.id == address }
+        onDisconnect?(info)
+    }
+
+    private func update(_ device: BluetoothDevice) {
+        if let index = devices.firstIndex(where: { $0.id == device.id }) {
+            if devices[index] != device { devices[index] = device }
+        } else {
+            devices.append(device)
+        }
+    }
+
+    /// Headphones report their batteries a few seconds after connecting, so look again a few times.
+    private func followBattery(of address: String) {
+        batteryTasks[address]?.cancel()
+        batteryTasks[address] = Task { [weak self] in
+            for delay in [1.5, 3, 6, 15] {
+                try? await Task.sleep(for: .seconds(delay))
+                guard let self, !Task.isCancelled, let device = IOBluetoothDevice(addressString: address), device.isConnected() else { return }
+                self.update(Self.describe(device, id: address))
+            }
+        }
+    }
+
+    // MARK: - Describing devices
+
+    nonisolated private static func describe(_ device: IOBluetoothDevice, id: String) -> BluetoothDevice {
+        BluetoothDevice(
+            id: id,
+            name: device.name ?? device.nameOrAddress ?? id,
+            symbol: symbol(for: device),
+            battery: battery(of: device, address: id)
+        )
+    }
+
+    nonisolated private static func battery(of device: IOBluetoothDevice, address: String) -> BluetoothBattery {
+        // Undocumented IOBluetoothDevice properties; 0 means "not reported".
+        func percent(_ key: String) -> Int? {
+            guard device.responds(to: NSSelectorFromString(key)),
+                  let value = (device.value(forKey: key) as? NSNumber)?.intValue,
+                  (1...100).contains(value) else { return nil }
+            return value
+        }
+        var battery = BluetoothBattery(
+            single: percent("batteryPercentSingle"),
+            left: percent("batteryPercentLeft"),
+            right: percent("batteryPercentRight"),
+            caseLevel: percent("batteryPercentCase")
+        )
+        if battery.main == nil {
+            battery.single = percent("batteryPercentCombined") ?? percent("headsetBattery") ?? hidBatteryPercent(address: address)
+        }
+        return battery
+    }
+
+    /// Apple's keyboards, mice and trackpads publish their battery in the I/O Registry instead.
+    nonisolated private static func hidBatteryPercent(address: String) -> Int? {
+        var iterator: io_iterator_t = 0
+        guard IOServiceGetMatchingServices(kIOMainPortDefault, IOServiceMatching("AppleDeviceManagementHIDEventService"), &iterator) == KERN_SUCCESS else { return nil }
+        defer { IOObjectRelease(iterator) }
+        let wanted = address.lowercased().replacingOccurrences(of: ":", with: "-")
+        var service = IOIteratorNext(iterator)
+        while service != 0 {
+            defer {
+                IOObjectRelease(service)
+                service = IOIteratorNext(iterator)
+            }
+            let deviceAddress = IORegistryEntryCreateCFProperty(service, "DeviceAddress" as CFString, kCFAllocatorDefault, 0)?.takeRetainedValue() as? String
+            guard deviceAddress?.lowercased().replacingOccurrences(of: ":", with: "-") == wanted else { continue }
+            return (IORegistryEntryCreateCFProperty(service, "BatteryPercent" as CFString, kCFAllocatorDefault, 0)?.takeRetainedValue() as? NSNumber)?.intValue
+        }
+        return nil
+    }
+
+    nonisolated private static let appleProducts: [Int: String] = [
+        0x2002: "airpods", 0x200F: "airpods", 0x2013: "airpods.gen3", 0x2019: "airpods.gen4", 0x201B: "airpods.gen4",
+        0x200E: "airpods.pro", 0x2014: "airpods.pro", 0x2024: "airpods.pro", 0x2027: "airpods.pro",
+        0x200A: "airpods.max", 0x201F: "airpods.max",
+        0x200B: "beats.powerbeats.pro", 0x2011: "beats.studiobuds", 0x2016: "beats.studiobuds", 0x2012: "beats.fitpro",
+    ]
+
+    nonisolated private static func symbol(for device: IOBluetoothDevice) -> String {
+        let vendor = (device.value(forKey: "vendorID") as? NSNumber)?.intValue
+        let product = (device.value(forKey: "productID") as? NSNumber)?.intValue
+        if vendor == 0x004C, let product, let symbol = appleProducts[product] { return symbol }
+
+        let name = (device.name ?? "").lowercased()
+        if name.contains("airpods max") { return "airpods.max" }
+        if name.contains("airpods pro") { return "airpods.pro" }
+        if name.contains("airpods") { return "airpods" }
+        if name.contains("beats") { return "beats.headphones" }
+        if name.contains("trackpad") { return "rectangle.and.hand.point.up.left.fill" }
+        if name.contains("magic mouse") { return "magicmouse.fill" }
+
+        // Bluetooth class of device: the major class says what it is, the minor class narrows it.
+        let minor = Int(device.deviceClassMinor)
+        switch Int(device.deviceClassMajor) {
+        case 0x01: return "laptopcomputer"
+        case 0x02: return "iphone"
+        case 0x04: return minor == 0x05 || minor == 0x07 ? "hifispeaker.fill" : "headphones"
+        case 0x05:
+            if minor & 0x0F == 0x01 || minor & 0x0F == 0x02 { return "gamecontroller.fill" }
+            if minor & 0x30 == 0x20 { return "computermouse.fill" }
+            return "keyboard.fill"
+        case 0x07: return "applewatch"
+        default: return "wave.3.right"
+        }
+    }
+}

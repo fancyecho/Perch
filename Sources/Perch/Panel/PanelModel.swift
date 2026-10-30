@@ -31,6 +31,8 @@ final class PanelModel {
     var isHovering = false
     var inputFocusRequest = 0
     var tab: TaskTab = .today
+    /// The panel is shown inside the notch island rather than the floating window.
+    @ObservationIgnored var isInIsland = false
 
     @ObservationIgnored var router: ((PanelMode, Bool) -> Void)?
     @ObservationIgnored var hoverHandler: ((Bool) -> Void)?

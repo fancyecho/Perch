@@ -24,6 +24,7 @@ final class PanelController: NSObject, NSWindowDelegate {
     private var fadeTask: Task<Void, Never>?
     private var settleTask: Task<Void, Never>?
     private var ignoresMoves = false
+    private var isSuspended = false
 
     init(store: TaskStore, model: PanelModel, swipe: SwipeTracker, settings: AppSettings) {
         self.store = store
@@ -62,6 +63,7 @@ final class PanelController: NSObject, NSWindowDelegate {
     }
 
     func go(_ target: PanelMode, focusInput: Bool = false) {
+        guard !isSuspended else { return }
         hoverTask?.cancel()
         generation += 1
         let token = generation
@@ -99,6 +101,25 @@ final class PanelController: NSObject, NSWindowDelegate {
         } else {
             animate()
         }
+    }
+
+    /// While the notch island hosts today's tasks, the floating pill steps aside.
+    func setSuspended(_ suspended: Bool) {
+        guard suspended != isSuspended else { return }
+        isSuspended = suspended
+        guard suspended else {
+            panel.orderFrontRegardless()
+            scheduleFade(after: 1.2)
+            return
+        }
+        hoverTask?.cancel()
+        peekWatchTask?.cancel()
+        if model.mode != .pill {
+            generation += 1
+            withoutAnimation { model.mode = .pill }
+            layoutCollapsed(home: homeScreenRect)
+        }
+        panel.orderOut(nil)
     }
 
     // MARK: - Window geometry

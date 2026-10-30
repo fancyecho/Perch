@@ -4,6 +4,9 @@ import UserNotifications
 /// Mirrors timed, open tasks into local notifications.
 final class ReminderScheduler: NSObject, UNUserNotificationCenterDelegate {
     var onOpen: (() -> Void)?
+    /// While the notch island announces reminders, notifications only go to Notification Center,
+    /// without a banner or sound of their own.
+    var deliversQuietly = false
     private var syncTask: Task<Void, Never>?
     private var isAuthorized: Bool?
 
@@ -48,7 +51,8 @@ final class ReminderScheduler: NSObject, UNUserNotificationCenterDelegate {
                 let content = UNMutableNotificationContent()
                 content.title = task.title
                 content.body = tr("到时间了 · \(DateText.time(time))", "Due now · \(DateText.time(time))")
-                content.sound = .default
+                content.sound = deliversQuietly ? nil : .default
+                content.interruptionLevel = deliversQuietly ? .passive : .active
                 var components = Self.utc.dateComponents([.year, .month, .day, .hour, .minute, .second], from: time)
                 components.calendar = Self.utc
                 components.timeZone = Self.utc.timeZone
@@ -63,7 +67,7 @@ final class ReminderScheduler: NSObject, UNUserNotificationCenterDelegate {
         _ center: UNUserNotificationCenter,
         willPresent notification: UNNotification
     ) async -> UNNotificationPresentationOptions {
-        [.banner, .sound]
+        await MainActor.run { deliversQuietly } ? [.list] : [.banner, .sound]
     }
 
     nonisolated func userNotificationCenter(

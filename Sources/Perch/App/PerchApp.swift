@@ -18,11 +18,13 @@ private struct MenuBarContent: View {
     @Environment(AppSettings.self) private var settings
     @Environment(Updater.self) private var updater
     @AppStorage(Pref.pinned) private var pinned = true
+    @AppStorage(Pref.islandEnabled) private var islandEnabled = true
 
     var body: some View {
-        Button(tr("打开面板", "Open Panel")) { app.controller?.go(.panel, focusInput: true) }
+        Button(tr("打开面板", "Open Panel")) { app.openTasks(focusInput: true) }
             .keyboardShortcut(settings.hotKey?.keyboardShortcut)
         Toggle(tr("始终置顶", "Always on Top"), isOn: $pinned)
+        Toggle(tr("刘海灵动岛", "Notch Island"), isOn: $islandEnabled)
         Divider()
         Button(tr("设置…", "Settings…")) { app.showSettings() }
             .keyboardShortcut(",")

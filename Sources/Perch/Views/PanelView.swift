@@ -71,7 +71,10 @@ private struct PanelHeader: View {
                 .frame(width: 30, height: 30)
                 .padding(.trailing, 4)
             Menu {
-                Toggle(tr("始终置顶", "Always on Top"), isOn: $pinned)
+                // The island is always on top; only the floating pill can be pinned or not.
+                if !model.isInIsland {
+                    Toggle(tr("始终置顶", "Always on Top"), isOn: $pinned)
+                }
                 Toggle(tr("悬停预览", "Peek on Hover"), isOn: $peekOnHover)
                 Toggle(tr("今天时间轴", "Today Timeline"), isOn: Binding(
                     get: { showsTimeline },

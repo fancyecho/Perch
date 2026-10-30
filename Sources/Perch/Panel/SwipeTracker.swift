@@ -20,16 +20,21 @@ final class SwipeTracker {
     @ObservationIgnored private var isHorizontal = false
     @ObservationIgnored private var rawOffset: CGFloat = 0
     @ObservationIgnored private var monitor: Any?
-    @ObservationIgnored private weak var window: NSWindow?
+    @ObservationIgnored private let windows = NSHashTable<NSWindow>.weakObjects()
     @ObservationIgnored private var onCommit: ((UUID, SwipeDirection) -> Void)?
 
     func install(in window: NSWindow, onCommit: @escaping (UUID, SwipeDirection) -> Void) {
-        self.window = window
+        windows.add(window)
         self.onCommit = onCommit
         monitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
             guard let self else { return event }
             return self.handle(event)
         }
+    }
+
+    /// Lets the same swipes work in another window, such as the notch island's task list.
+    func track(_ window: NSWindow) {
+        windows.add(window)
     }
 
     func hover(_ id: UUID, _ hovering: Bool) {
@@ -41,7 +46,7 @@ final class SwipeTracker {
     }
 
     private func handle(_ event: NSEvent) -> NSEvent? {
-        guard event.window === window, event.hasPreciseScrollingDeltas else { return event }
+        guard let window = event.window, windows.contains(window), event.hasPreciseScrollingDeltas else { return event }
 
         if event.phase.contains(.began) {
             isTracking = true

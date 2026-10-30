@@ -3,7 +3,7 @@ import Carbon.HIToolbox
 
 /// Borderless, always-on-top panel that can take keyboard focus without activating the app,
 /// so typing a task never pulls the user out of whatever they are working in.
-final class FloatingPanel: NSPanel {
+class FloatingPanel: NSPanel {
     var onCancel: (() -> Void)?
 
     init() {
@@ -27,6 +27,13 @@ final class FloatingPanel: NSPanel {
 
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
+
+    /// A pill snapped close under the menu bar has its transparent margin reaching up behind the menu
+    /// bar, which stays on top and keeps its clicks. Without this AppKit would shove the whole window
+    /// down below the menu bar.
+    override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect {
+        frameRect
+    }
 
     override func cancelOperation(_ sender: Any?) {
         onCancel?()
