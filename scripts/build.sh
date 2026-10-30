@@ -18,10 +18,14 @@ cp Resources/Info.plist "$APP/Contents/Info.plist"
 if [[ -f Resources/AppIcon.icns ]]; then
   cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 fi
+# Focus's sounds, and the launchd agent that relaunches Perch when it is killed (Focus › keep alive).
+cp -R Resources/Sounds "$APP/Contents/Resources/Sounds"
+mkdir -p "$APP/Contents/Library/LaunchAgents"
+cp Resources/LaunchAgents/*.plist "$APP/Contents/Library/LaunchAgents/"
 # Loaded into /usr/bin/perl at runtime to read Now Playing (see NowPlayingService); sign it on its own.
 cp "$BIN_DIR/$HELPER" "$APP/Contents/Frameworks/$HELPER"
 codesign --force --sign - "$APP/Contents/Frameworks/$HELPER" >/dev/null
-codesign --force --sign - "$APP" >/dev/null
+scripts/sign.sh "$APP"
 echo "Built $APP"
 
 if [[ "${2:-}" == "--run" ]]; then

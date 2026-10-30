@@ -1,48 +1,102 @@
 import SwiftUI
 
-/// The open island, with the date up beside the notch as on Alcove. In merged style it holds what's
-/// playing on the left and today's tasks on the right (today takes the whole width when nothing
-/// plays). Otherwise the tasks have their own capsule, so it is just the player, or a glance at the
-/// Mac's status when nothing plays.
+/// The open island, with the date up beside the notch as on Alcove. Its first page holds what's
+/// playing (and in merged style today's tasks beside it, or alone when nothing plays); the page
+/// below it is the Mac's status. With neither playing nor tasks inside, the status is the one page.
+/// Two fingers up and down, or the dots at the edge, move between pages.
 struct ExpandedIslandView: View {
     @Environment(IslandModel.self) private var model
     @Environment(NowPlayingService.self) private var media
+    @Environment(FocusController.self) private var focus
+    @Environment(StatusPreferences.self) private var statusPrefs
 
     var body: some View {
         TimelineView(.everyMinute) { context in
             let now = context.date
             let hasMedia = media.track != nil
             let showsTasks = model.taskStyle == .merged && !model.isLocked
+            let pages = IslandPage.available(hasMain: hasMedia || showsTasks, gauges: statusPrefs.islandGauges, locked: model.isLocked)
+            let page = pages.contains(model.page) ? model.page : pages[0]
             VStack(spacing: 0) {
                 Group {
                     if let hud = model.inlineLevel {
                         LevelWings(hud: hud)
                     } else {
-                        TopWings(now: now, hasMedia: hasMedia, showsTasks: showsTasks)
+                        TopWings(now: now, hasMedia: hasMedia && page == .main, showsTasks: showsTasks && page == .main,
+                                 showsStatus: page == .status && pages.count > 1)
                     }
                 }
                 .frame(height: model.geometry.notchSize.height)
-                Group {
-                    if showsTasks {
-                        HStack(alignment: .top, spacing: 16) {
-                            if hasMedia {
-                                MediaColumn().frame(width: 150)
-                            }
-                            TodayColumn(now: now)
-                        }
-                        .padding(.top, 10)
-                    } else if hasMedia {
-                        WidePlayer().padding(.top, 8)
+                ZStack(alignment: .top) {
+                    if let pass = focus.passes.first {
+                        PassStrip(pass: pass).padding(.top, 12)
                     } else {
-                        StatusGlance().padding(.top, 10)
+                        pageContent(page, now: now, hasMedia: hasMedia, showsTasks: showsTasks)
+                            .id(page)
+                            // The content follows the fingers: down to the next page, up to the one before.
+                            .transition(.push(from: model.pageMovesForward ? .top : .bottom))
                     }
                 }
                 .padding(.horizontal, 18)
                 .padding(.bottom, 14)
-                .frame(maxHeight: .infinity, alignment: .top)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                .clipped()
+                .overlay(alignment: .leading) {
+                    if pages.count > 1, focus.passes.isEmpty {
+                        PageDots(pages: pages, current: page)
+                            .padding(.leading, 6)
+                            .padding(.bottom, 8)
+                    }
+                }
             }
         }
         .foregroundStyle(.white)
+    }
+
+    @ViewBuilder
+    private func pageContent(_ page: IslandPage, now: Date, hasMedia: Bool, showsTasks: Bool) -> some View {
+        switch page {
+        case .main:
+            if showsTasks {
+                HStack(alignment: .top, spacing: 16) {
+                    if hasMedia {
+                        MediaColumn().frame(width: 150)
+                    }
+                    TodayColumn(now: now)
+                }
+                .padding(.top, 10)
+            } else {
+                WidePlayer().padding(.top, 8)
+            }
+        case .status:
+            StatusGlance(showsHint: !hasMedia && !showsTasks).padding(.top, 10)
+        }
+    }
+}
+
+/// Which page of the open island shows, as dots down its left edge; each one goes to its page.
+private struct PageDots: View {
+    let pages: [IslandPage]
+    let current: IslandPage
+    @Environment(IslandModel.self) private var model
+
+    var body: some View {
+        VStack(spacing: 4) {
+            ForEach(pages, id: \.self) { page in
+                Button { model.pageHandler?(page) } label: {
+                    Capsule()
+                        .fill(Color.white.opacity(page == current ? 0.9 : 0.28))
+                        .frame(width: 4, height: page == current ? 12 : 4)
+                        .padding(3)
+                        .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .help(page == .main ? tr("正在播放", "Now Playing") : tr("系统状态", "System Status"))
+            }
+        }
+        .animation(.spring(duration: 0.35, bounce: 0.3), value: current)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(tr("灵动岛页面，双指上下滑切换", "Island pages; swipe up or down with two fingers"))
     }
 }
 
@@ -51,6 +105,7 @@ private struct TopWings: View {
     let now: Date
     let hasMedia: Bool
     let showsTasks: Bool
+    var showsStatus = false
     @Environment(NowPlayingService.self) private var media
     @Environment(TaskStore.self) private var store
 
@@ -64,6 +119,9 @@ private struct TopWings: View {
                     Text(media.sourceName ?? "")
                         .lineLimit(1)
                 }
+            } else if showsStatus {
+                Label(tr("系统状态", "Status"), systemImage: "gauge.with.dots.needle.67percent")
+                    .lineLimit(1)
             } else if showsTasks {
                 let progress = store.progress(now: now)
                 let remaining = progress.total - progress.done
@@ -87,6 +145,54 @@ private struct TopWings: View {
         }
         .font(.system(size: 11, weight: .medium))
         .foregroundStyle(.white.opacity(0.6))
+    }
+}
+
+// MARK: - Focus
+
+/// A running pass, opened up: what it lets through, how long is left, and the way to end it now.
+private struct PassStrip: View {
+    let pass: ActivePass
+    @Environment(FocusController.self) private var focus
+    @State private var hovering = false
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { context in
+            let remaining = max(0, Int(pass.end.timeIntervalSince(context.date).rounded(.up)))
+            let urgent = remaining <= 30
+            HStack(spacing: 12) {
+                PassRing(icon: pass.icon, isSite: pass.site != nil,
+                         fraction: min(Double(remaining) / ActivePass.duration, 1), urgent: urgent, lineWidth: 3)
+                    .frame(width: 44, height: 44)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(pass.name)
+                        .font(.system(size: 14, weight: .semibold))
+                        .lineLimit(1)
+                    HStack(spacing: 5) {
+                        Text(urgent ? tr("马上结束", "Ending") : tr("临时使用", "Pass"))
+                        Text(String(format: "%d:%02d", remaining / 60, remaining % 60))
+                            .monospacedDigit()
+                            .foregroundStyle(urgent ? PassRing.urgentColor : .white.opacity(0.85))
+                            .contentTransition(.numericText(countsDown: true))
+                            .animation(.snappy(duration: 0.3), value: remaining)
+                    }
+                    .font(.system(size: 11.5, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.55))
+                }
+                Spacer(minLength: 8)
+                Button { focus.endPass(pass.key) } label: {
+                    Text(tr("现在结束", "End Now"))
+                        .font(.system(size: 11.5, weight: .semibold))
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(Capsule().fill(Color.white.opacity(hovering ? 0.22 : 0.14)))
+                        .contentShape(.capsule)
+                }
+                .buttonStyle(PressScaleStyle())
+                .onHover { hovering = $0 }
+                .help(tr("回到时段里，App 会被收起", "Back to the schedule; the app is put away"))
+            }
+        }
     }
 }
 
@@ -208,11 +314,15 @@ private struct TimedProgress: View {
     }
 }
 
-/// With nothing playing: the battery, headphones and where sound goes, at a glance.
+/// With nothing playing: the battery, headphones and where sound goes, and the Mac's vital signs,
+/// at a glance.
 private struct StatusGlance: View {
     @Environment(SystemVolume.self) private var volume
     @Environment(BluetoothMonitor.self) private var bluetooth
     @Environment(PowerMonitor.self) private var power
+    @Environment(StatusPreferences.self) private var statusPrefs
+    /// Whether to say nothing is playing, when there's no gauge row to show instead.
+    var showsHint = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -231,16 +341,121 @@ private struct StatusGlance: View {
                     StatusChip(text: volume.route.name) { Image(systemName: volume.route.symbol) }
                 }
             }
-            HStack(spacing: 7) {
-                Image(systemName: "music.note")
-                    .foregroundStyle(.white.opacity(0.35))
-                Text(tr("没有正在播放的内容 · 在任意 App 中播放就能在这里控制", "Nothing playing · play something in any app to control it here"))
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(.white.opacity(0.5))
-                    .lineLimit(2)
+            if statusPrefs.islandGauges || !showsHint {
+                SystemGauges()
+            } else {
+                HStack(spacing: 7) {
+                    Image(systemName: "music.note")
+                        .foregroundStyle(.white.opacity(0.35))
+                    Text(tr("没有正在播放的内容 · 在任意 App 中播放就能在这里控制", "Nothing playing · play something in any app to control it here"))
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(.white.opacity(0.5))
+                        .lineLimit(2)
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// CPU, memory, temperature and network as small rings; a click opens the full status.
+private struct SystemGauges: View {
+    @Environment(SystemMonitor.self) private var monitor
+    @Environment(IslandModel.self) private var model
+    @State private var hovering = false
+
+    var body: some View {
+        Button { model.statusHandler?() } label: {
+            HStack(spacing: 0) {
+                MiniGauge(symbol: "cpu", fraction: monitor.cpu.usage / 100, value: "\(Fmt.percent(monitor.cpu.usage))%",
+                          label: "CPU", tint: tint(Palette.cpu, monitor.cpu.usage))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                MiniGauge(symbol: "memorychip", fraction: monitor.memory.usedPercent / 100,
+                          value: "\(Fmt.percent(monitor.memory.usedPercent))%", label: tr("内存", "Memory"),
+                          tint: monitor.memory.pressureLevel > 1 ? .orange : Palette.memory)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                if let celsius = monitor.temperature?.cpu {
+                    MiniGauge(symbol: "thermometer.medium", fraction: (celsius - 30) / 70, value: "\(Int(celsius.rounded()))°",
+                              label: tr("温度", "Temp"), tint: celsius >= 90 ? .red : celsius >= 75 ? .orange : .mint)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                NetworkGauge(down: monitor.network.down, up: monitor.network.up)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.white.opacity(hovering ? 0.1 : 0.05)))
+            .contentShape(.rect(cornerRadius: 12))
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .animation(.easeOut(duration: 0.15), value: hovering)
+        .help(tr("打开系统状态", "Open System Status"))
+        .accessibilityLabel(tr("系统状态", "System Status"))
+    }
+
+    /// Past 90% a gauge turns red.
+    private func tint(_ base: Color, _ percent: Double) -> Color {
+        percent >= 90 ? Color(red: 1, green: 0.38, blue: 0.36) : base
+    }
+}
+
+private struct MiniGauge: View {
+    let symbol: String
+    let fraction: Double
+    let value: String
+    let label: String
+    let tint: Color
+
+    var body: some View {
+        HStack(spacing: 6) {
+            ZStack {
+                Circle().stroke(Color.white.opacity(0.12), lineWidth: 2.5)
+                Circle()
+                    .trim(from: 0, to: min(max(fraction, 0.02), 1))
+                    .stroke(tint, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                    .rotationEffect(.degrees(-90))
+                    .animation(.smooth(duration: 0.6), value: fraction)
+                Image(systemName: symbol)
+                    .font(.system(size: 8.5, weight: .bold))
+                    .foregroundStyle(.white.opacity(0.75))
+            }
+            .frame(width: 24, height: 24)
+            VStack(alignment: .leading, spacing: 0) {
+                Text(value)
+                    .font(.system(size: 12, weight: .semibold, design: .rounded).monospacedDigit())
+                    .contentTransition(.numericText())
+                    .animation(.snappy, value: value)
+                Text(label)
+                    .font(.system(size: 9.5, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.5))
+            }
+            .lineLimit(1)
+            .fixedSize()
+        }
+    }
+}
+
+private struct NetworkGauge: View {
+    let down: Double
+    let up: Double
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "network")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Palette.down)
+                .frame(width: 24, height: 24)
+                .background(Circle().stroke(Color.white.opacity(0.12), lineWidth: 2.5))
+            VStack(alignment: .leading, spacing: 0) {
+                Text("↓ " + Fmt.compactRate(down))
+                Text("↑ " + Fmt.compactRate(up))
+                    .foregroundStyle(.white.opacity(0.5))
+            }
+            .font(.system(size: 10, weight: .semibold, design: .rounded).monospacedDigit())
+            .lineLimit(1)
+            .fixedSize()
+        }
     }
 }
 

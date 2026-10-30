@@ -44,7 +44,7 @@ fi
 scripts/build.sh release
 BUILD_NUMBER="$(git rev-list --count HEAD 2>/dev/null || echo 1)"
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD_NUMBER" build/Perch.app/Contents/Info.plist
-codesign --force --sign - build/Perch.app >/dev/null
+scripts/sign.sh build/Perch.app
 
 rm -f "$ZIP" "$ZIP.sig"
 ditto -c -k --keepParent build/Perch.app "$ZIP"

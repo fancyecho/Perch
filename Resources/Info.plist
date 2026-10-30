@@ -19,7 +19,7 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.3.0</string>
+	<string>0.4.0</string>
 	<key>CFBundleVersion</key>
 	<string>1</string>
 	<key>LSApplicationCategoryType</key>
@@ -28,6 +28,8 @@
 	<string>26.0</string>
 	<key>LSUIElement</key>
 	<true/>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>Perch 读取浏览器当前标签页的网址，才能在专注时段里暂停你设定的网站，不会记录或上传浏览记录。Perch reads the current tab’s address so a Focus schedule can pause the sites you chose; nothing is recorded or sent anywhere.</string>
 	<key>NSBluetoothAlwaysUsageDescription</key>
 	<string>Perch 在刘海灵动岛里显示已连接的蓝牙设备和电量。Perch shows connected Bluetooth devices and their battery in the notch island.</string>
 	<key>NSHighResolutionCapable</key>

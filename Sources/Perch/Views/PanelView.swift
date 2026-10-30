@@ -15,14 +15,20 @@ struct PanelView: View {
                 TabBar(now: now)
                     .padding(.horizontal, 14)
                     .padding(.top, 10)
-                if let focus = store.focus, let task = store.task(focus.taskID) {
+                if model.tab != .focus, let focus = store.focus, let task = store.task(focus.taskID) {
                     FocusBanner(task: task, session: focus)
                         .padding(.horizontal, 14)
                         .padding(.top, 10)
                         .transition(.move(edge: .top).combined(with: .opacity))
                 }
-                TaskList(tab: model.tab, now: now)
-                    .padding(.top, 6)
+                if model.tab == .focus {
+                    FocusPage(now: now)
+                        .padding(.top, 6)
+                        .transition(.opacity)
+                } else {
+                    TaskList(tab: model.tab, now: now)
+                        .padding(.top, 6)
+                }
             }
         }
         .overlay(alignment: .bottom) { NoticeToast().padding(.bottom, 14) }
@@ -86,8 +92,10 @@ private struct PanelHeader: View {
                         Task { await updater.install(release) }
                     }
                 }
+                FocusMenuItems()
+                Divider()
                 Button(tr("设置…", "Settings…")) { model.openSettings() }
-                Button(tr("退出 Perch", "Quit Perch")) { NSApp.terminate(nil) }
+                QuitMenuItem()
             } label: {
                 Image(systemName: "ellipsis")
                     .font(.system(size: 13, weight: .semibold))
@@ -203,7 +211,7 @@ private struct QuickAddField: View {
     private var defaultDay: Day? {
         let today = DateText.today(now)
         switch model.tab {
-        case .today, .done: return today
+        case .today, .done, .focus: return today
         case .upcoming: return today.adding(days: 1)
         case .inbox: return nil
         }
@@ -258,18 +266,25 @@ private struct TabBar: View {
                 Button {
                     withAnimation(.snappy(duration: 0.28)) { model.tab = tab }
                 } label: {
-                    HStack(spacing: 4) {
-                        Text(tab.title)
-                            .font(.system(size: 12, weight: selected ? .semibold : .medium))
-                        if count > 0 && tab != .done {
-                            Text("\(count)")
-                                .font(.system(size: 10, weight: .semibold).monospacedDigit())
-                                .foregroundStyle(.secondary)
-                                .contentTransition(.numericText())
+                    Group {
+                        if tab == .focus {
+                            FocusTabLabel(selected: selected, now: now)
+                                .frame(width: 34)
+                        } else {
+                            HStack(spacing: 4) {
+                                Text(tab.title)
+                                    .font(.system(size: 12, weight: selected ? .semibold : .medium))
+                                if count > 0 && tab != .done {
+                                    Text("\(count)")
+                                        .font(.system(size: 10, weight: .semibold).monospacedDigit())
+                                        .foregroundStyle(.secondary)
+                                        .contentTransition(.numericText())
+                                }
+                            }
+                            .frame(maxWidth: .infinity)
                         }
                     }
                     .foregroundStyle(selected ? .primary : .secondary)
-                    .frame(maxWidth: .infinity)
                     .padding(.vertical, 5)
                     .background {
                         if selected {
@@ -295,6 +310,7 @@ private struct FocusBanner: View {
     let task: TaskItem
     let session: FocusSession
     @Environment(TaskStore.self) private var store
+    @Environment(FocusController.self) private var focus
     @State private var pulsing = false
 
     var body: some View {
@@ -317,6 +333,10 @@ private struct FocusBanner: View {
             Spacer(minLength: 6)
             FocusTimer(start: session.startedAt)
                 .font(.system(size: 15, weight: .semibold, design: .rounded).monospacedDigit())
+            // Working on paper: blur the screens and keep the clock running for this task.
+            IconButton(symbol: "lamp.desk", help: tr("离开电脑去做（模糊屏幕，\(focus.shortcutText)）", "Step away to do it (blur the screens, \(focus.shortcutText))")) {
+                focus.startSession()
+            }
             IconButton(symbol: "checkmark", help: tr("完成", "Complete")) {
                 Haptics.confirm()
                 withAnimation(.snappy) { store.complete(task.id) }
@@ -351,6 +371,7 @@ private struct TaskList: View {
                 case .upcoming: upcoming
                 case .inbox: inbox
                 case .done: done
+                case .focus: EmptyView()
                 }
             }
             .padding(.horizontal, 8)

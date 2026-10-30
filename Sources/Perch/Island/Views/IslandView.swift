@@ -7,8 +7,10 @@ struct IslandView: View {
 
     var body: some View {
         ZStack(alignment: .top) {
-            if model.taskStyle == .capsule {
+            // The status card opens in every style; the capsule only lives here in capsule style.
+            if model.taskStyle == .capsule || model.cardMode == .status {
                 TaskCard()
+                    .transition(.opacity.combined(with: .scale(scale: 0.9, anchor: .top)))
             }
             // Drawn last so it passes over the capsule: banners drop in front of it, and the open
             // island swallows it.
@@ -63,6 +65,7 @@ private struct GlowRing: View {
         case .charging: [.green, .mint, .green, .mint, .green]
         case .celebration: [.pink, .orange, .yellow, .green, .cyan, .blue, .purple, .pink]
         case .lowBattery: [.red, .orange, .red, .orange, .red]
+        case .alert: [.orange, .yellow, .orange, .red, .orange]
         }
     }
 
@@ -93,10 +96,12 @@ private struct LockGlyph: View {
     }
 }
 
-/// Right-click on the island: play controls when something plays, the tasks, and Settings.
+/// Right-click on the island: play controls when something plays, a pass to end, the tasks,
+/// Focus, and Settings.
 private struct IslandMenu: View {
     @Environment(IslandModel.self) private var model
     @Environment(NowPlayingService.self) private var media
+    @Environment(FocusController.self) private var focus
 
     var body: some View {
         if media.track != nil {
@@ -107,13 +112,20 @@ private struct IslandMenu: View {
         }
         // On the lock screen only the player is anyone's business.
         if !model.isLocked {
+            ForEach(focus.passes) { pass in
+                Button(tr("结束 \(pass.name) 的临时使用", "End \(pass.name) Pass")) { focus.endPass(pass.key) }
+            }
+            if !focus.passes.isEmpty { Divider() }
             if model.taskStyle != .floating {
                 Button(tr("全部任务", "All Tasks")) { model.tasksHandler?(false) }
                 Button(tr("新建任务", "New Task")) { model.tasksHandler?(true) }
                 Divider()
             }
+            FocusMenuItems()
+            Button(tr("系统状态", "System Status")) { model.statusHandler?() }
+            Divider()
             Button(tr("灵动岛设置…", "Island Settings…")) { model.settingsHandler?(.island) }
-            Button(tr("退出 Perch", "Quit Perch")) { NSApp.terminate(nil) }
+            QuitMenuItem()
         }
     }
 }
@@ -284,6 +296,8 @@ private struct LiveActivityView: View {
                 .frame(width: 20, height: 20)
         case .locked, .unlocked:
             LockGlyph(isOpen: live.leading == .unlocked)
+        case .pass:
+            PassWing(showsTime: false)
         case nil:
             EmptyView()
         }
@@ -310,8 +324,42 @@ private struct LiveActivityView: View {
                     .foregroundStyle(Color.accentColor)
                     .fixedSize()
             }
+        case .countdown:
+            PassWing(showsTime: true)
         case nil:
             EmptyView()
+        }
+    }
+}
+
+/// A pass beside the notch: its icon in the shrinking ring on the left, the time left on the right,
+/// turning red for the last half minute.
+private struct PassWing: View {
+    let showsTime: Bool
+    @Environment(FocusController.self) private var focus
+
+    var body: some View {
+        if let pass = focus.passes.first {
+            TimelineView(.periodic(from: .now, by: 1)) { context in
+                let remaining = max(0, Int(pass.end.timeIntervalSince(context.date).rounded(.up)))
+                let urgent = remaining <= 30
+                if showsTime {
+                    Text(String(format: "%d:%02d", remaining / 60, remaining % 60))
+                        .font(.system(size: 12.5, weight: .semibold, design: .rounded).monospacedDigit())
+                        .foregroundStyle(urgent ? PassRing.urgentColor : .white.opacity(0.9))
+                        .contentTransition(.numericText(countsDown: true))
+                        .animation(.snappy(duration: 0.3), value: remaining)
+                        // The last half minute breathes, like a lamp burning down.
+                        .opacity(urgent && remaining % 2 == 0 ? 0.55 : 1)
+                        .animation(.easeInOut(duration: 0.9), value: remaining % 2)
+                        .fixedSize()
+                } else {
+                    PassRing(icon: pass.icon, isSite: pass.site != nil,
+                             fraction: min(Double(remaining) / ActivePass.duration, 1), urgent: urgent, lineWidth: 2)
+                        .frame(width: 21, height: 21)
+                }
+            }
+            .accessibilityLabel(tr("\(pass.name) 临时使用", "\(pass.name) pass"))
         }
     }
 }

@@ -3,6 +3,7 @@ import Foundation
 import IOBluetooth
 import IOKit
 import Observation
+import Synchronization
 
 nonisolated struct BluetoothBattery: Equatable, Sendable {
     var single: Int?
@@ -44,6 +45,7 @@ final class BluetoothMonitor: NSObject {
     @ObservationIgnored private var disconnectNotifications: [String: IOBluetoothUserNotification] = [:]
     @ObservationIgnored private var startedAt = Date.distantPast
     @ObservationIgnored private var batteryTasks: [String: Task<Void, Never>] = [:]
+    @ObservationIgnored private var modelTask: Task<Void, Never>?
     @ObservationIgnored private var startTask: Task<Void, Never>?
 
     /// Without a usage description macOS kills the process on first use, as with a bare `swift run`.
@@ -115,6 +117,7 @@ final class BluetoothMonitor: NSObject {
         disconnectNotifications[info.id]?.unregister()
         disconnectNotifications[info.id] = device.register(forDisconnectNotification: self, selector: #selector(deviceDisconnected(_:device:)))
         update(info)
+        lookUpModels()
         // Registering reports the devices that were already connected; those aren't news.
         if Date.now.timeIntervalSince(startedAt) > 2 { onConnect?(info) }
         followBattery(of: info.id)
@@ -133,6 +136,21 @@ final class BluetoothMonitor: NSObject {
             if devices[index] != device { devices[index] = device }
         } else {
             devices.append(device)
+        }
+    }
+
+    /// IOBluetooth often won't say which model a device is, so ask system_profiler (no permission
+    /// needed) and redraw with the right symbol, AirPods 3 rather than the generic AirPods.
+    private func lookUpModels() {
+        guard modelTask == nil else { return }
+        modelTask = Task { [weak self] in
+            await Self.loadAppleModels()
+            guard let self else { return }
+            modelTask = nil
+            for device in devices {
+                guard let bluetooth = IOBluetoothDevice(addressString: device.id) else { continue }
+                update(Self.describe(bluetooth, id: device.id))
+            }
         }
     }
 
@@ -205,10 +223,48 @@ final class BluetoothMonitor: NSObject {
         0x200B: "beats.powerbeats.pro", 0x2011: "beats.studiobuds", 0x2016: "beats.studiobuds", 0x2012: "beats.fitpro",
     ]
 
+    /// Address ("40-da-5c-…") → product ID of Apple devices, as system_profiler reports them.
+    nonisolated private static let appleModels = Mutex<[String: Int]>([:])
+
+    nonisolated private static func addressKey(_ address: String) -> String {
+        address.lowercased().replacingOccurrences(of: ":", with: "-")
+    }
+
+    @concurrent
+    nonisolated private static func loadAppleModels() async {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/sbin/system_profiler")
+        process.arguments = ["SPBluetoothDataType", "-json", "-detailLevel", "basic"]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = FileHandle.nullDevice
+        guard (try? process.run()) != nil else { return }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let controllers = json["SPBluetoothDataType"] as? [[String: Any]] else { return }
+        var models: [String: Int] = [:]
+        for controller in controllers {
+            let entries = (controller["device_connected"] as? [[String: Any]] ?? []) + (controller["device_not_connected"] as? [[String: Any]] ?? [])
+            for entry in entries {
+                for case let info as [String: Any] in entry.values {
+                    guard (info["device_vendorID"] as? String)?.lowercased() == "0x004c",
+                          let address = info["device_address"] as? String,
+                          let product = (info["device_productID"] as? String).flatMap({ Int($0.dropFirst(2), radix: 16) })
+                    else { continue }
+                    models[addressKey(address)] = product
+                }
+            }
+        }
+        appleModels.withLock { $0.merge(models) { _, new in new } }
+    }
+
     nonisolated private static func symbol(for device: IOBluetoothDevice) -> String {
         let vendor = (device.value(forKey: "vendorID") as? NSNumber)?.intValue
         let product = (device.value(forKey: "productID") as? NSNumber)?.intValue
         if vendor == 0x004C, let product, let symbol = appleProducts[product] { return symbol }
+        if let address = device.addressString,
+           let product = appleModels.withLock({ $0[addressKey(address)] }), let symbol = appleProducts[product] { return symbol }
 
         let name = (device.name ?? "").lowercased()
         if name.contains("airpods max") { return "airpods.max" }

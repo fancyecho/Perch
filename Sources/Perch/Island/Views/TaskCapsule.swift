@@ -15,11 +15,15 @@ struct TaskCard: View {
         let shape = RoundedRectangle(cornerRadius: cornerRadius(for: size), style: .continuous)
         // Today's tasks are nobody else's business on the lock screen, and a menu dropping out of
         // the menu bar shouldn't have the capsule over it.
-        let hidden = model.isLocked || (model.isMenuOpen && model.cardMode != .panel)
+        let isOpen = model.cardMode == .panel || model.cardMode == .status
+        let hidden = model.isLocked || model.isCurtained || (model.isMenuOpen && !isOpen)
         ZStack(alignment: .top) {
             if model.cardMode == .panel {
                 PanelView()
                     .frame(width: IslandModel.panelSize.width, height: IslandModel.panelSize.height)
+                    .transition(.opacity.animation(.easeOut(duration: 0.22).delay(0.06)))
+            } else if model.cardMode == .status {
+                StatusCardContent()
                     .transition(.opacity.animation(.easeOut(duration: 0.22).delay(0.06)))
             } else {
                 CapsuleContent(
@@ -50,7 +54,27 @@ struct TaskCard: View {
         case .capsule: size.height / 2
         case .peek: 20
         case .panel: 24
+        case .status: Metrics.panelRadius
         }
+    }
+}
+
+/// The Mac's status in the card: the dashboard the menu bar readout opens too, the card growing
+/// and shrinking with its pages.
+private struct StatusCardContent: View {
+    @Environment(IslandModel.self) private var model
+    @State private var presented = false
+
+    var body: some View {
+        StatusDashboard { model.settingsHandler?(.status) }
+            .fixedSize(horizontal: false, vertical: true)
+            // The cards settle in one after another, as under the menu bar.
+            .environment(\.panelPresented, presented)
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
+                guard abs(height - model.statusHeight) > 0.5 else { return }
+                withAnimation(Motion.page) { model.statusHeight = height }
+            }
+            .onAppear { withAnimation(Motion.open) { presented = true } }
     }
 }
 
@@ -83,6 +107,7 @@ private struct CapsuleRow: View {
     @Environment(TaskStore.self) private var store
     @Environment(IslandModel.self) private var model
     @Environment(AppSettings.self) private var settings
+    @Environment(ScheduleStore.self) private var schedules
 
     var body: some View {
         Button { model.tasksHandler?(false) } label: {
@@ -101,10 +126,20 @@ private struct CapsuleRow: View {
         let headline = store.headline(now: now)
         let isFocusing = store.focus != nil && headline?.id == store.focus?.taskID
         let ring: CGFloat = hovering ? 22 : 16
+        let schedule = schedules.activeOccurrences(at: now).last
 
         return HStack(spacing: hovering ? 10 : 8) {
             ProgressRing(done: progress.done, total: progress.total, lineWidth: hovering ? 2.6 : 2.2)
                 .frame(width: ring, height: ring)
+                .overlay {
+                    // A schedule running: a ring of lamp oil around today's progress, burning down.
+                    if let schedule {
+                        ScheduleHalo(occurrence: schedule, now: now)
+                            .padding(hovering ? -4 : -3.5)
+                            .transition(.scale(scale: 0.6).combined(with: .opacity))
+                    }
+                }
+                .padding(.horizontal, schedule == nil ? 0 : 2)
 
             VStack(alignment: .leading, spacing: 1) {
                 // The next task slides up into place when the current one is done.
@@ -114,7 +149,7 @@ private struct CapsuleRow: View {
                     .id(headline?.id)
                     .transition(.push(from: .bottom))
                 if hovering {
-                    Text(subtitle(headline: headline, isFocusing: isFocusing, remaining: progress.total - progress.done))
+                    Text(subtitle(headline: headline, isFocusing: isFocusing, schedule: schedule, remaining: progress.total - progress.done))
                         .font(.system(size: 10.5))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
@@ -166,10 +201,30 @@ private struct CapsuleRow: View {
         }
     }
 
-    private func subtitle(headline: TaskItem?, isFocusing: Bool, remaining: Int) -> String {
+    private func subtitle(headline: TaskItem?, isFocusing: Bool, schedule: Occurrence?, remaining: Int) -> String {
         if isFocusing { return tr("专注中", "Focusing") }
+        if let schedule {
+            return tr("\(schedule.rule.name) · 至 \(ScheduleText.time(schedule.end))", "\(schedule.rule.name) · until \(ScheduleText.time(schedule.end))")
+        }
         if headline == nil { return tr("点击添加任务", "Click to add a task") }
         return remaining > 1 ? tr("下一项 · 还剩 \(remaining) 项", "Up next · \(remaining) left") : tr("最后一项", "Last one")
+    }
+}
+
+/// What's left of a running schedule, as a thin ring in its color.
+private struct ScheduleHalo: View {
+    let occurrence: Occurrence
+    let now: Date
+
+    var body: some View {
+        let color = RuleTint.color(occurrence.rule.tint)
+        Circle()
+            .trim(from: 0, to: 1 - occurrence.progress(at: now))
+            .stroke(color, style: StrokeStyle(lineWidth: 1.6, lineCap: .round))
+            .rotationEffect(.degrees(-90))
+            .shadow(color: color.opacity(0.6), radius: 2.5)
+            .animation(.smooth(duration: 0.8), value: occurrence.progress(at: now))
+            .help(tr("\(occurrence.rule.name) · \(ScheduleText.moment(occurrence.end, from: now)) 结束", "\(occurrence.rule.name) · ends \(ScheduleText.moment(occurrence.end, from: now))"))
     }
 }
 
@@ -236,6 +291,8 @@ private struct CapsuleMenu: View {
         }
         Button(tr("全部任务", "All Tasks")) { model.tasksHandler?(false) }
         Button(tr("新建任务", "New Task")) { model.tasksHandler?(true) }
+        Divider()
+        FocusMenuItems()
         Divider()
         Button(tr("待办设置…", "Task Settings…")) { model.settingsHandler?(.tasks) }
     }

@@ -9,6 +9,7 @@ struct PerchApp: App {
             MenuBarContent(app: appDelegate)
                 .environment(AppSettings.shared)
                 .environment(Updater.shared)
+                .environment(appDelegate.focus)
         }
     }
 }
@@ -26,6 +27,9 @@ private struct MenuBarContent: View {
         Toggle(tr("始终置顶", "Always on Top"), isOn: $pinned)
         Toggle(tr("刘海灵动岛", "Notch Island"), isOn: $islandEnabled)
         Divider()
+        FocusMenuItems()
+        Button(tr("系统状态", "System Status")) { app.openStatus() }
+        Divider()
         Button(tr("设置…", "Settings…")) { app.showSettings() }
             .keyboardShortcut(",")
         if let release = updater.availableRelease {
@@ -38,7 +42,7 @@ private struct MenuBarContent: View {
                 Task { await updater.check(userInitiated: true) }
             }
         }
-        Button(tr("退出 Perch", "Quit Perch")) { NSApp.terminate(nil) }
+        QuitMenuItem()
             .keyboardShortcut("q")
     }
 }

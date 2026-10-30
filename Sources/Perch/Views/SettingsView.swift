@@ -3,12 +3,14 @@ import SwiftUI
 
 /// The pages of Settings, shown under a toolbar of tabs.
 enum SettingsTab: Int, CaseIterable {
-    case general, tasks, island, help
+    case general, tasks, focus, status, island, help
 
     var title: String {
         switch self {
         case .general: tr("通用", "General")
         case .tasks: tr("待办", "Tasks")
+        case .focus: tr("专注", "Focus")
+        case .status: tr("状态", "Status")
         case .island: tr("灵动岛", "Island")
         case .help: tr("帮助", "Help")
         }
@@ -18,6 +20,8 @@ enum SettingsTab: Int, CaseIterable {
         switch self {
         case .general: "gearshape"
         case .tasks: "checklist"
+        case .focus: "lamp.desk"
+        case .status: "gauge.with.dots.needle.67percent"
         case .island: "rectangle.topthird.inset.filled"
         case .help: "questionmark.circle"
         }
@@ -28,8 +32,10 @@ enum SettingsTab: Int, CaseIterable {
         switch self {
         case .general: 440
         case .tasks: 470
+        case .focus: 720
+        case .status: 640
         case .island: 660
-        case .help: 520
+        case .help: 600
         }
     }
 }
@@ -42,6 +48,8 @@ struct SettingsPane: View {
             switch tab {
             case .general: GeneralPane()
             case .tasks: TasksPane()
+            case .focus: FocusPane()
+            case .status: StatusPane()
             case .island: IslandPane()
             case .help: HelpPane()
             }
@@ -68,8 +76,16 @@ private struct GeneralPane: View {
                     Text("English").tag(AppLanguage.english)
                 }
                 TimeZoneRow()
-                Toggle(tr("登录时启动", "Launch at login"), isOn: $launchAtLogin)
-                    .onChange(of: launchAtLogin) { _, enabled in updateLoginItem(enabled) }
+                if FocusStore.shared.keepAlive {
+                    // The keep-alive agent starts Perch at login itself.
+                    Toggle(isOn: .constant(true)) {
+                        SettingLabel(tr("登录时启动", "Launch at login"), tr("已包含在 专注 › 防止被强行退出 里", "Included in Focus › Keep Perch alive"))
+                    }
+                    .disabled(true)
+                } else {
+                    Toggle(tr("登录时启动", "Launch at login"), isOn: $launchAtLogin)
+                        .onChange(of: launchAtLogin) { _, enabled in updateLoginItem(enabled) }
+                }
                 if let loginError {
                     Text(loginError).font(.caption).foregroundStyle(.red)
                 }
@@ -238,14 +254,28 @@ private struct HelpPane: View {
                 ReferenceRow(example: tr("触控板向右扫 / 鼠标向右拖", "Swipe or drag right"), meaning: tr("完成", "Complete"))
                 ReferenceRow(example: tr("触控板向左扫 / 鼠标向左拖", "Swipe or drag left"), meaning: tr("推迟到明天", "Move to tomorrow"))
                 ReferenceRow(example: tr("双击任务文字", "Double-click a title"), meaning: tr("编辑", "Edit"))
-                ReferenceRow(example: "⌘1 – ⌘4 · ⌘N · Esc", meaning: tr("切换分组 · 新任务 · 收起", "Switch list · New task · Collapse"))
+                ReferenceRow(example: "⌘1 – ⌘5 · ⌘N · Esc", meaning: tr("切换分组（⌘5 专注）· 新任务 · 收起", "Switch list (⌘5 Focus) · New task · Collapse"))
             }
 
             Section(tr("灵动岛", "Island")) {
                 ReferenceRow(example: tr("在刘海上双指左右滑", "Two-finger swipe sideways on the notch"), meaning: tr("下一首 / 上一首", "Next / previous track"))
-                ReferenceRow(example: tr("在刘海上双指下滑 / 上滑", "Two-finger swipe down / up on the notch"), meaning: tr("展开 / 收起", "Open / close"))
+                ReferenceRow(example: tr("在刘海上双指下滑", "Two-finger swipe down on the notch"), meaning: tr("展开", "Open"))
+                ReferenceRow(example: tr("展开后双指上下滑 · 点边上的圆点", "Once open, swipe up / down · the dots at the edge"), meaning: tr("切换正在播放 / 系统状态", "Switch Now Playing / Status"))
                 ReferenceRow(example: tr("在胶囊上双指右滑 / 左滑", "Two-finger swipe right / left on the capsule"), meaning: tr("完成 / 推迟到明天", "Complete / move to tomorrow"))
                 ReferenceRow(example: tr("右键刘海或胶囊", "Right-click the notch or capsule"), meaning: tr("菜单与设置", "Menu & settings"))
+            }
+
+            Section(tr("专注", "Focus")) {
+                ReferenceRow(example: "⌥⌘F", meaning: tr("开始专注，模糊所有屏幕", "Start focus: blur every screen"))
+                ReferenceRow(example: tr("长按 ⌥⌘F 约 4 秒 · 或输入解锁语句", "Hold ⌥⌘F for 4 s · or type the phrase"), meaning: tr("解除模糊", "Lift the blur"))
+                ReferenceRow(example: tr("专注横幅上的台灯按钮", "The lamp on a task's focus banner"), meaning: tr("离开电脑去做这项任务", "Step away to do that task"))
+                ReferenceRow(example: tr("拦截界面上按住按钮 3 秒", "Hold the button on the shield for 3 s"), meaning: tr("温和时段里再用 5 分钟", "Five more minutes (gentle schedules)"))
+                ReferenceRow(example: tr("展开刘海上的倒计时", "Open the countdown at the notch"), meaning: tr("提前结束临时使用", "End a pass early"))
+            }
+
+            Section(tr("状态", "Status")) {
+                ReferenceRow(example: tr("灵动岛状态页的读数 · 右键刘海", "The island's status page · right-click the notch"), meaning: tr("系统状态", "System status"))
+                ReferenceRow(example: tr("右键进程", "Right-click a process"), meaning: tr("在访达中显示、切换或退出", "Show in Finder, switch, or quit"))
             }
         }
     }
@@ -355,7 +385,8 @@ private struct UpdateSection: View {
 
 // MARK: - Time zone
 
-private struct TimeZoneRow: View {
+/// The app's time zone, shared by tasks and Focus schedules.
+struct TimeZoneRow: View {
     @Environment(AppSettings.self) private var settings
     @State private var choosing = false
 
@@ -366,13 +397,14 @@ private struct TimeZoneRow: View {
                     choosing = true
                 } label: {
                     HStack(spacing: 4) {
-                        Text(settings.timeZoneID == nil ? tr("跟随系统", "System") + " · " + settings.timeZone.identifier : settings.timeZone.identifier)
+                        Text(settings.timeZoneID == nil ? tr("跟随系统", "System") + " · " + ZoneCatalog.title(for: settings.timeZone) : ZoneCatalog.title(for: settings.timeZone))
                         Image(systemName: "chevron.up.chevron.down").imageScale(.small)
                     }
                 }
                 .buttonStyle(.bordered)
                 .popover(isPresented: $choosing, arrowEdge: .bottom) {
-                    TimeZonePicker(isPresented: $choosing)
+                    @Bindable var settings = settings
+                    ZonePicker(selection: $settings.timeZoneID) { choosing = false }
                 }
                 TimelineView(.everyMinute) { context in
                     Text(status(at: context.date))
@@ -402,68 +434,5 @@ private struct TimeZoneRow: View {
             parts.append(tr("不实行夏令时", "no daylight saving"))
         }
         return parts.joined(separator: " · ")
-    }
-}
-
-private struct TimeZonePicker: View {
-    @Binding var isPresented: Bool
-    @Environment(AppSettings.self) private var settings
-    @State private var query = ""
-
-    private struct Zone: Identifiable {
-        let id: String
-        let offset: Int
-        let name: String
-    }
-
-    private var zones: [Zone] {
-        let now = Date.now
-        let all = TimeZone.knownTimeZoneIdentifiers.compactMap { id -> Zone? in
-            guard let zone = TimeZone(identifier: id) else { return nil }
-            return Zone(id: id, offset: zone.secondsFromGMT(for: now), name: zone.localizedName(for: .generic, locale: settings.locale) ?? "")
-        }
-        let needle = query.trimmingCharacters(in: .whitespaces).lowercased()
-        let filtered = needle.isEmpty ? all : all.filter {
-            $0.id.lowercased().contains(needle) || $0.name.lowercased().contains(needle)
-                || $0.id.replacingOccurrences(of: "_", with: " ").lowercased().contains(needle)
-        }
-        return filtered.sorted { ($0.offset, $0.id) < ($1.offset, $1.id) }
-    }
-
-    var body: some View {
-        VStack(spacing: 8) {
-            TextField(tr("搜索城市或时区", "Search city or zone"), text: $query)
-                .textFieldStyle(.roundedBorder)
-                .multilineTextAlignment(.leading)
-            List {
-                row(id: nil, title: tr("跟随系统", "Follow system"), subtitle: TimeZone.current.identifier)
-                ForEach(zones) { zone in
-                    row(id: zone.id, title: zone.id.replacingOccurrences(of: "_", with: " "), subtitle: "\(DateText.utcOffset(TimeZone(identifier: zone.id) ?? .gmt, at: .now)) · \(zone.name)")
-                }
-            }
-            .listStyle(.plain)
-        }
-        .padding(10)
-        .frame(width: 340, height: 420)
-    }
-
-    private func row(id: String?, title: String, subtitle: String) -> some View {
-        Button {
-            settings.timeZoneID = id
-            isPresented = false
-        } label: {
-            HStack {
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(title)
-                    Text(subtitle).font(.caption).foregroundStyle(.secondary)
-                }
-                Spacer()
-                if settings.timeZoneID == id {
-                    Image(systemName: "checkmark").foregroundStyle(Color.accentColor)
-                }
-            }
-            .contentShape(.rect)
-        }
-        .buttonStyle(.plain)
     }
 }

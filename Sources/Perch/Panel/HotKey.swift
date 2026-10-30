@@ -7,20 +7,29 @@ import SwiftUI
 final class GlobalHotKey {
     private var hotKeyRef: EventHotKeyRef?
     private var handlerRef: EventHandlerRef?
+    /// Each shortcut sees every hot key event of the app, so it answers only to its own id.
+    private let id: UInt32
     private let action: () -> Void
+    private let release: (() -> Void)?
 
-    init(action: @escaping () -> Void) {
+    /// `release` hears the keys come back up too, for shortcuts that are held down.
+    init(id: UInt32 = 1, action: @escaping () -> Void, release: (() -> Void)? = nil) {
+        self.id = id
         self.action = action
-        var eventType = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
+        self.release = release
+        var eventTypes = [
+            EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed)),
+            EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyReleased)),
+        ]
         let context = Unmanaged.passUnretained(self).toOpaque()
-        InstallEventHandler(GetApplicationEventTarget(), hotKeyCallback, 1, &eventType, context, &handlerRef)
+        InstallEventHandler(GetApplicationEventTarget(), hotKeyCallback, eventTypes.count, &eventTypes, context, &handlerRef)
     }
 
     func register(_ combo: HotKeyCombo?) -> HotKeyStatus {
         unregister()
         guard let combo else { return .disabled }
-        let id = EventHotKeyID(signature: OSType(0x5052_4348), id: 1)
-        let status = RegisterEventHotKey(combo.keyCode, combo.modifiers, id, GetApplicationEventTarget(), 0, &hotKeyRef)
+        let hotKeyID = EventHotKeyID(signature: OSType(0x5052_4348), id: id)
+        let status = RegisterEventHotKey(combo.keyCode, combo.modifiers, hotKeyID, GetApplicationEventTarget(), 0, &hotKeyRef)
         if status != noErr { hotKeyRef = nil }
         return status == noErr ? .registered : .unavailable
     }
@@ -30,7 +39,16 @@ final class GlobalHotKey {
         hotKeyRef = nil
     }
 
-    fileprivate func fire() { action() }
+    /// Passes events for another shortcut on down the handler chain.
+    fileprivate func handle(id: UInt32, pressed: Bool) -> OSStatus {
+        guard id == self.id else { return OSStatus(eventNotHandledErr) }
+        if pressed {
+            action()
+        } else {
+            release?()
+        }
+        return noErr
+    }
 
     isolated deinit {
         unregister()
@@ -38,11 +56,16 @@ final class GlobalHotKey {
     }
 }
 
-nonisolated private func hotKeyCallback(_: EventHandlerCallRef?, _: EventRef?, context: UnsafeMutableRawPointer?) -> OSStatus {
-    guard let context else { return noErr }
+nonisolated private func hotKeyCallback(_: EventHandlerCallRef?, _ event: EventRef?, context: UnsafeMutableRawPointer?) -> OSStatus {
+    guard let event, let context else { return noErr }
+    var hotKeyID = EventHotKeyID()
+    let status = GetEventParameter(event, EventParamName(kEventParamDirectObject), EventParamType(typeEventHotKeyID),
+                                   nil, MemoryLayout<EventHotKeyID>.size, nil, &hotKeyID)
+    guard status == noErr else { return OSStatus(eventNotHandledErr) }
+    let id = hotKeyID.id
+    let pressed = GetEventKind(event) == UInt32(kEventHotKeyPressed)
     let hotKey = Unmanaged<GlobalHotKey>.fromOpaque(context).takeUnretainedValue()
-    MainActor.assumeIsolated { hotKey.fire() }
-    return noErr
+    return MainActor.assumeIsolated { hotKey.handle(id: id, pressed: pressed) }
 }
 
 // MARK: - Display & conversion

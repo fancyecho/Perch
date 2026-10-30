@@ -55,6 +55,8 @@ final class IslandController {
     var onOpenSettings: ((SettingsTab) -> Void)?
 
     private let store: TaskStore
+    private let focus: FocusController
+    private let status: StatusController
     private let panel = IslandPanel()
     private let keyTap = MediaKeyTap()
     /// Keeps the window fixed over the notch through Space switches and on the lock screen.
@@ -102,12 +104,15 @@ final class IslandController {
     /// Whether today's tasks live with the island rather than in the floating pill.
     var hostsTasks: Bool { preferences.taskStyle != .floating }
 
-    /// The full task list is open: the black one in merged style or the glass panel in capsule style.
-    private var isListOpen: Bool { model.isShowingTasks || model.cardMode == .panel }
+    /// The full task list is open (the black one in merged style or the glass panel in capsule
+    /// style), or the status card is.
+    private var isListOpen: Bool { model.isShowingTasks || model.cardMode == .panel || model.cardMode == .status }
     private var isOpen: Bool { model.isExpanded || isListOpen }
 
-    init(store: TaskStore, swipe: SwipeTracker) {
+    init(store: TaskStore, swipe: SwipeTracker, focus: FocusController, status: StatusController) {
         self.store = store
+        self.focus = focus
+        self.status = status
         model = IslandModel(geometry: NotchGeometry(screen: NotchGeometry.preferredScreen()))
         taskPanel.mode = .panel
         taskPanel.isInIsland = true
@@ -123,6 +128,10 @@ final class IslandController {
             .environment(AppSettings.shared)
             .environment(Updater.shared)
             .environment(Feedback.shared)
+            .environment(focus)
+            .environment(ScheduleStore.shared)
+            .environment(status.monitor)
+            .environment(status.prefs)
         let hosting = IslandHostingView(rootView: root)
         hosting.sizingOptions = []
         // The window sits right over the camera housing, so its safe area flips around as it gains
@@ -139,8 +148,11 @@ final class IslandController {
         taskPanel.router = { [weak self] mode, focusInput in
             if mode == .panel { self?.openTaskList(focusInput: focusInput) } else { self?.closeTaskList() }
         }
-        taskPanel.settingsHandler = { [weak self] in self?.onOpenSettings?(.tasks) }
+        taskPanel.settingsHandler = { [weak self] tab in self?.onOpenSettings?(tab) }
         model.settingsHandler = { [weak self] tab in self?.onOpenSettings?(tab) }
+        model.statusHandler = { [weak self] in self?.openStatus() }
+        model.pageHandler = { [weak self] page in self?.showPage(page) }
+        model.alertHandler = { [weak self] alert in self?.handleAlert(alert) }
         volume.onChange = { [weak self] in self?.showLevel(.volume) }
         volume.onRouteChange = { [weak self] route in self?.routeChanged(route) }
         brightness.onChange = { [weak self] in self?.brightnessChanged() }
@@ -211,6 +223,7 @@ final class IslandController {
         media.stop()
         bluetooth.stop()
         power.stop()
+        status.monitor.panelVisible = false
         notchSpace?.remove(panel)
         notchSpace = nil
         panel.orderOut(nil)
@@ -221,7 +234,7 @@ final class IslandController {
     func expand() {
         dwellTask?.cancel()
         collapseTask?.cancel()
-        guard !isOpen else { return }
+        guard !isOpen, !model.isCurtained else { return }
         bannerTask?.cancel()
         bluetooth.refreshBatteries()
         if preferences.haptics { Haptics.tick() }
@@ -238,6 +251,10 @@ final class IslandController {
         withAnimation(Self.close) {
             model.isExpanded = false
             model.inlineLevel = nil
+        } completion: { [weak self] in
+            // It opens on the first page again next time.
+            guard let self, !self.model.isExpanded else { return }
+            self.model.page = .main
         }
         refreshPointer()
         showPendingReminder()
@@ -246,7 +263,7 @@ final class IslandController {
     /// Opens the full task list: the glass panel the capsule grows into, or the black list the island
     /// grows into in merged style. Either takes the keyboard.
     func openTaskList(focusInput: Bool = false) {
-        guard hostsTasks, !model.isLocked else { return }
+        guard hostsTasks, !model.isLocked, !model.isCurtained else { return }
         let wait = keyboardReadyAt.timeIntervalSinceNow
         guard wait <= 0 else {
             Task { [weak self] in
@@ -259,6 +276,15 @@ final class IslandController {
         collapseTask?.cancel()
         peekTask?.cancel()
         cardFadeTask?.cancel()
+        if model.cardMode == .status {
+            status.monitor.panelVisible = false
+            if preferences.taskStyle == .merged {
+                withAnimation(PanelController.morph) {
+                    model.cardMode = .capsule
+                    model.pinnedCardTop = nil
+                }
+            }
+        }
         if preferences.taskStyle == .merged, !model.isLocked {
             if !model.isShowingTasks {
                 bannerTask?.cancel()
@@ -304,11 +330,15 @@ final class IslandController {
         if model.isShowingTasks {
             withAnimation(Self.close) { model.isShowingTasks = false } completion: { handBackFocus() }
         }
-        if model.cardMode == .panel {
+        if model.cardMode == .panel || model.cardMode == .status {
+            if model.cardMode == .status { status.monitor.panelVisible = false }
             withAnimation(PanelController.morph) {
                 model.cardMode = .capsule
                 model.pinnedCardTop = nil
-            } completion: { handBackFocus() }
+            } completion: { [weak self] in
+                handBackFocus()
+                if self?.model.cardMode != .status { self?.status.prefs.page = .overview }
+            }
         }
         panel.acceptsKey = false
         refreshPointer()
@@ -318,6 +348,67 @@ final class IslandController {
 
     func toggleTaskList() {
         isListOpen ? closeTaskList() : openTaskList(focusInput: true)
+    }
+
+    // MARK: - Status
+
+    /// The capsule grows into the Mac's status (in every style: without a capsule, the card comes
+    /// down out of the island on its own).
+    func openStatus() {
+        guard !model.isLocked, !model.isCurtained else { return }
+        guard model.cardMode != .status else { return closeTaskList() }
+        dwellTask?.cancel()
+        collapseTask?.cancel()
+        peekTask?.cancel()
+        cardFadeTask?.cancel()
+        if model.isShowingTasks {
+            withAnimation(Self.close) { model.isShowingTasks = false }
+        }
+        if model.isExpanded {
+            withAnimation(Self.close) {
+                model.isExpanded = false
+                model.inlineLevel = nil
+            }
+        }
+        let top = model.layout(for: model.restState, hovering: false).height + IslandModel.capsuleGap
+        withAnimation(PanelController.morph) {
+            model.pinnedCardTop = top
+            model.cardMode = .status
+            model.isCardFaded = false
+        }
+        if preferences.haptics { Haptics.tick() }
+        // Full sampling starts once the card has mostly opened, so the morph stays smooth.
+        Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(350))
+            guard let self, self.model.cardMode == .status else { return }
+            self.status.monitor.panelVisible = true
+        }
+        panel.acceptsKey = true
+        panel.makeKeyAndOrderFront(nil)
+        notchSpace?.add(panel)
+        refreshPointer()
+        startWatching()
+    }
+
+    /// Shows a Mac alert; false when it should go to Notification Center instead (on the lock screen).
+    func showAlert(_ alert: SystemAlert) -> Bool {
+        guard !model.isLocked else { return false }
+        // The island already says low battery its own way.
+        if alert.kind == .battery, preferences.battery { return true }
+        present(.alert(alert), for: .seconds(10))
+        if model.banner?.kind == .alert { flash(.alert) }
+        return true
+    }
+
+    private func handleAlert(_ alert: SystemAlert) {
+        bannerTask?.cancel()
+        withAnimation(Self.close) { model.banner = nil }
+        refreshPointer()
+        if case .runaway(let pid) = alert.kind {
+            NSRunningApplication(processIdentifier: pid)?.terminate()
+        } else {
+            openStatus()
+        }
     }
 
     // MARK: - The capsule
@@ -381,7 +472,8 @@ final class IslandController {
 
     private func present(_ banner: IslandBanner, for duration: Duration) {
         // Status still shows beside the notch over an open glass panel; nothing drops onto it.
-        guard !model.isExpanded, !model.isShowingTasks, !(banner.dropsDown && model.cardMode == .panel) else { return }
+        guard !model.isExpanded, !model.isShowingTasks, !(banner.dropsDown && model.cardMode == .panel),
+              !model.isCurtained || banner.passesCurtain else { return }
         if model.banner?.kind == banner.kind {
             model.banner = banner
         } else {
@@ -529,7 +621,12 @@ final class IslandController {
             if live.leading == nil, progress.done < progress.total { live.leading = .progress }
         }
         if live.trailing == nil, playing { live.trailing = .equalizer }
-        let next = live.leading == nil && live.trailing == nil ? nil : live
+        // A pass running out matters more than what's playing.
+        if !focus.passes.isEmpty, !model.isLocked {
+            live.leading = .pass
+            live.trailing = .countdown
+        }
+        let next = live.leading == nil && live.trailing == nil || model.isCurtained ? nil : live
         if next != model.live {
             withAnimation(next == nil ? Self.close : Self.open) { model.live = next }
             refreshPointer()
@@ -744,7 +841,8 @@ final class IslandController {
     /// real pointer movement from the island changing shape under a pointer that is standing still.
     private func refreshPointer(byMoving: Bool = false) {
         let mouse = NSEvent.mouseLocation
-        let overIsland = hitRect.contains(mouse)
+        // Over the focus blur the island only answers while it has something to answer, like a reminder.
+        let overIsland = hitRect.contains(mouse) && (!model.isCurtained || model.banner != nil)
         let overCard = cardHitRect?.contains(mouse) ?? false
         let interactive = overIsland || overCard
         if panel.ignoresMouseEvents == interactive { panel.ignoresMouseEvents = !interactive }
@@ -755,7 +853,9 @@ final class IslandController {
     }
 
     private var cardHitRect: NSRect? {
-        guard model.taskStyle == .capsule, !model.isLocked, !(model.isMenuOpen && model.cardMode != .panel) else { return nil }
+        let isOpen = model.cardMode == .panel || model.cardMode == .status
+        guard model.taskStyle == .capsule || model.cardMode == .status, !model.isLocked, !model.isCurtained,
+              !(model.isMenuOpen && !isOpen) else { return nil }
         let size = model.cardSize
         let frame = panel.frame
         return NSRect(x: frame.midX - size.width / 2, y: frame.maxY - model.cardTop - size.height, width: size.width, height: size.height)
@@ -776,7 +876,7 @@ final class IslandController {
         startWatching()
         // Only a pointer that moves in opens the island: not one the island grew under. A level HUD
         // stays put under the pointer so its bar can be dragged, and a reminder so it can be answered.
-        guard byMoving, preferences.hoverToExpand, !isOpen,
+        guard byMoving, preferences.hoverToExpand, !isOpen, !model.isCurtained,
               model.banner?.kind != .level, model.banner?.kind != .reminder else { return }
         dwellTask?.cancel()
         dwellTask = Task { [weak self] in
@@ -868,8 +968,35 @@ final class IslandController {
         return row.contains(NSEvent.mouseLocation)
     }
 
-    /// Sideways changes the track (to the left for the next one, like turning a page); down opens
-    /// the island and up closes it.
+    /// The pages the open island has right now (see IslandPage).
+    private var islandPages: [IslandPage] {
+        let hasMain = media.track != nil || (preferences.taskStyle == .merged && !model.isLocked)
+        return IslandPage.available(hasMain: hasMain, gauges: status.prefs.islandGauges, locked: model.isLocked)
+    }
+
+    /// Moves the open island to the page below (`forward`) or above. Up from the first page, the
+    /// island closes, as swiping up always did.
+    func turnPage(forward: Bool) {
+        let pages = islandPages
+        let index = pages.firstIndex(of: model.page) ?? 0
+        let next = index + (forward ? 1 : -1)
+        guard pages.indices.contains(next) else {
+            if !forward { collapse() }
+            return
+        }
+        showPage(pages[next])
+    }
+
+    func showPage(_ page: IslandPage) {
+        let pages = islandPages
+        guard page != model.page, let target = pages.firstIndex(of: page) else { return }
+        model.pageMovesForward = target > (pages.firstIndex(of: model.page) ?? 0)
+        if preferences.haptics { Haptics.tick() }
+        withAnimation(.spring(duration: 0.42, bounce: 0.18)) { model.page = page }
+    }
+
+    /// Sideways changes the track (to the left for the next one, like turning a page). Down opens
+    /// the island; once open, up and down move between its pages.
     private func finishIslandSwipe() {
         let dx = swipeTravel.width
         let dy = swipeTravel.height
@@ -882,10 +1009,13 @@ final class IslandController {
                 try? await Task.sleep(for: .milliseconds(140))
                 withAnimation(.spring(duration: 0.45, bounce: 0.45)) { self?.model.mediaNudge = 0 }
             }
-        } else if dy > 40, abs(dy) > abs(dx) {
-            expand()
-        } else if dy < -40, abs(dy) > abs(dx) {
-            collapse()
+        } else if abs(dy) > 40, abs(dy) > abs(dx) {
+            if model.isExpanded {
+                // Fingers moving down go down to the next page.
+                turnPage(forward: dy > 0)
+            } else if dy > 0 {
+                expand()
+            }
         }
     }
 
@@ -913,6 +1043,35 @@ final class IslandController {
             }
         }
         withAnimation(.spring(duration: 0.35, bounce: 0.25)) { model.capsuleSwipe = 0 }
+    }
+
+    // MARK: - Focus
+
+    /// The focus blur is up: the island stays a plain notch above it, and only a task falling due or
+    /// a level the user changed shows on it.
+    func setCurtained(_ curtained: Bool) {
+        guard curtained != model.isCurtained else { return }
+        if curtained {
+            closeTaskList()
+            collapse()
+            peekTask?.cancel()
+            bannerTask?.cancel()
+            withAnimation(Self.close) {
+                model.cardMode = .capsule
+                model.isCardHovering = false
+                model.isHovering = false
+                if let banner = model.banner, !banner.passesCurtain { model.banner = nil }
+            }
+        }
+        withAnimation(.smooth(duration: 0.4)) { model.isCurtained = curtained }
+        updateLiveActivity()
+        refreshPointer()
+        if !curtained { scheduleCardFade() }
+    }
+
+    /// A pass started or ended.
+    func focusChanged() {
+        updateLiveActivity()
     }
 
     // MARK: - Window & preferences

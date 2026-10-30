@@ -20,12 +20,18 @@ struct Notice: Identifiable, Equatable {
 @Observable
 final class TaskStore {
     private(set) var tasks: [TaskItem] = []
-    private(set) var focus: FocusSession?
+    private(set) var focus: FocusSession? {
+        didSet {
+            if let oldValue, oldValue != focus { onFocusEnded?(oldValue) }
+        }
+    }
     var notice: Notice?
 
     @ObservationIgnored var onChange: (() -> Void)?
     /// Called after a completion; `clearedToday` is true when nothing is left for today.
     @ObservationIgnored var onComplete: ((_ clearedToday: Bool, _ playsSound: Bool) -> Void)?
+    /// A focus session ended: stopped, its task done or deleted, or another one started.
+    @ObservationIgnored var onFocusEnded: ((FocusSession) -> Void)?
     @ObservationIgnored private var saveTask: Task<Void, Never>?
     @ObservationIgnored private let fileURL: URL
 
@@ -275,6 +281,7 @@ extension TaskStore {
         case .upcoming: upcoming(now: now).reduce(0) { $0 + $1.tasks.count }
         case .inbox: inbox().count
         case .done: completed().count
+        case .focus: 0
         }
     }
 

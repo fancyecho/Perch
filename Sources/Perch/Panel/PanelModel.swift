@@ -6,6 +6,8 @@ enum PanelMode: Equatable {
 
 enum TaskTab: Int, CaseIterable, Identifiable {
     case today, upcoming, inbox, done
+    /// Not a list of tasks: today's focus and the schedules.
+    case focus
 
     var id: Int { rawValue }
 
@@ -15,6 +17,7 @@ enum TaskTab: Int, CaseIterable, Identifiable {
         case .upcoming: tr("即将", "Upcoming")
         case .inbox: tr("收件箱", "Inbox")
         case .done: tr("已完成", "Done")
+        case .focus: tr("专注", "Focus")
         }
     }
 }
@@ -36,7 +39,7 @@ final class PanelModel {
 
     @ObservationIgnored var router: ((PanelMode, Bool) -> Void)?
     @ObservationIgnored var hoverHandler: ((Bool) -> Void)?
-    @ObservationIgnored var settingsHandler: (() -> Void)?
+    @ObservationIgnored var settingsHandler: ((SettingsTab) -> Void)?
 
     var cardRect: CGRect {
         switch mode {
@@ -58,7 +61,7 @@ final class PanelModel {
         hoverHandler?(hovering)
     }
 
-    func openSettings() {
-        settingsHandler?()
+    func openSettings(_ tab: SettingsTab = .tasks) {
+        settingsHandler?(tab)
     }
 }

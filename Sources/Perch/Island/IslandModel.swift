@@ -46,9 +46,11 @@ enum TaskStyle: String, CaseIterable {
     }
 }
 
-/// The glass card under the island in capsule style.
+/// The glass card under the island: the capsule (capsule style), and what it opens into.
 enum CardMode: Equatable {
     case capsule, peek, panel
+    /// The Mac's status; it opens in every style, not only with the capsule.
+    case status
 }
 
 enum ReminderAction {
@@ -76,9 +78,10 @@ enum IslandBanner: Equatable {
     case route(AudioRoute)
     case track
     case reminder(TaskItem, alsoDue: Int)
+    case alert(SystemAlert)
 
     enum Kind: Equatable {
-        case level, device, power, route, track, reminder
+        case level, device, power, route, track, reminder, alert
     }
 
     /// Banners of the same kind update in place instead of closing and reopening.
@@ -90,6 +93,15 @@ enum IslandBanner: Equatable {
         case .route: .route
         case .track: .track
         case .reminder: .reminder
+        case .alert: .alert
+        }
+    }
+
+    /// What still shows while the focus blur is up: a key the user pressed, a task falling due.
+    var passesCurtain: Bool {
+        switch kind {
+        case .level, .reminder: true
+        case .device, .power, .route, .track, .alert: false
         }
     }
 
@@ -97,7 +109,7 @@ enum IslandBanner: Equatable {
     /// to say drop down below it.
     var dropsDown: Bool {
         switch kind {
-        case .track, .reminder: true
+        case .track, .reminder, .alert: true
         case .level, .device, .power, .route: false
         }
     }
@@ -109,22 +121,48 @@ struct LiveActivity: Equatable {
         case artwork, progress
         /// The screen is locked; `unlocked` plays for a moment as it opens.
         case locked, unlocked
+        /// A paused app or site let through for a few minutes: its icon in the ring of time left.
+        case pass
     }
 
     enum Trailing: Equatable {
         case equalizer, due, focus
+        /// The pass's minutes and seconds.
+        case countdown
     }
 
     var leading: Leading?
     var trailing: Trailing?
 
     /// Times need a little more room than icons.
-    var wing: CGFloat { trailing == .due || trailing == .focus ? 60 : 44 }
+    var wing: CGFloat {
+        switch trailing {
+        case .due, .focus, .countdown: 60
+        case .equalizer, nil: 44
+        }
+    }
+}
+
+/// The open island's pages, one above the other: what's playing (or today's tasks in merged
+/// style), then the Mac's status. A two-finger swipe moves between them.
+enum IslandPage: Equatable {
+    case main, status
+
+    /// The pages there are right now. Without anything playing (or tasks inside the island) the
+    /// status is the only page; on the lock screen only the first one shows.
+    static func available(hasMain: Bool, gauges: Bool, locked: Bool) -> [IslandPage] {
+        if locked { return [hasMain ? .main : .status] }
+        var pages: [IslandPage] = hasMain ? [.main] : []
+        if gauges || !hasMain { pages.append(.status) }
+        return pages
+    }
 }
 
 /// A light that runs once around the island's edge.
 enum IslandGlow: Equatable {
     case charging, celebration, lowBattery
+    /// Something about the Mac needs a look: running hot, short of memory or disk.
+    case alert
 }
 
 enum IslandState: Equatable {
@@ -176,6 +214,9 @@ final class IslandModel {
     static let capsuleMinWidth: CGFloat = 196
     static let peekRowHeight: CGFloat = 34
     static let panelSize = CGSize(width: 368, height: 560)
+    static let statusWidth = StatusPanel.panelWidth
+    /// The tallest the status card may grow (its battery page); the window leaves room for it.
+    static let statusMaxHeight: CGFloat = 740
 
     var geometry: NotchGeometry
     var isExpanded = false
@@ -196,6 +237,8 @@ final class IslandModel {
     var pinnedCardTop: CGFloat?
     /// The screen is locked: the island stays on the notch but keeps tasks out of sight.
     var isLocked = false
+    /// The focus blur is up: the island stays a plain notch above it and the capsule steps away.
+    var isCurtained = false
     /// Another app has a menu open; the island's space sits above menus, so the capsule steps aside.
     var isMenuOpen = false
     var glow: IslandGlow?
@@ -203,6 +246,11 @@ final class IslandModel {
     var mediaNudge: CGFloat = 0
     /// How far the capsule's task has been swiped: right completes, left moves it to tomorrow.
     var capsuleSwipe: CGFloat = 0
+    /// The status card's height, as its current page lays out.
+    var statusHeight: CGFloat = 600
+    var page = IslandPage.main
+    /// The last page change went to the page below, so the new one comes up from the bottom.
+    var pageMovesForward = true
 
     @ObservationIgnored var expandHandler: (() -> Void)?
     @ObservationIgnored var levelHandler: ((LevelKind, Double) -> Void)?
@@ -210,6 +258,12 @@ final class IslandModel {
     /// Opens the full task list; true also focuses the new-task field.
     @ObservationIgnored var tasksHandler: ((Bool) -> Void)?
     @ObservationIgnored var settingsHandler: ((SettingsTab) -> Void)?
+    /// Opens the Mac's status in the card under the island.
+    @ObservationIgnored var statusHandler: (() -> Void)?
+    /// Moves the open island to a page.
+    @ObservationIgnored var pageHandler: ((IslandPage) -> Void)?
+    /// The action on an alert banner: quit the runaway process, or look at the status.
+    @ObservationIgnored var alertHandler: ((SystemAlert) -> Void)?
 
     init(geometry: NotchGeometry) {
         self.geometry = geometry
@@ -259,7 +313,7 @@ final class IslandModel {
         let lowestCardTop = layout(for: .banner(.track), hovering: false).height + Self.capsuleGap
         return CGSize(
             width: max(layouts.map(\.width).max() ?? 0, Self.panelSize.width) + Self.windowMargin * 2,
-            height: max(layouts.map(\.height).max() ?? 0, lowestCardTop + Self.panelSize.height) + Self.windowMargin
+            height: max(layouts.map(\.height).max() ?? 0, lowestCardTop + max(Self.panelSize.height, Self.statusMaxHeight)) + Self.windowMargin
         )
     }
 
@@ -287,6 +341,8 @@ final class IslandModel {
             return CGSize(width: width + 16, height: Self.capsuleHoverHeight + CGFloat(max(peekRows, 1)) * Self.peekRowHeight + 10)
         case .panel:
             return Self.panelSize
+        case .status:
+            return CGSize(width: Self.statusWidth, height: min(statusHeight, Self.statusMaxHeight))
         }
     }
 

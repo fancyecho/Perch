@@ -6,6 +6,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let store = TaskStore()
     let model = PanelModel()
     let swipe = SwipeTracker()
+    let focus = FocusController()
+    let status = StatusController()
     private(set) var controller: PanelController?
     private(set) var island: IslandController?
     private var hotKey: GlobalHotKey?
@@ -13,11 +15,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var settingsWindow: NSWindow?
     private var settingsTabs: NSTabViewController?
     private var defaultsObserver: NSObjectProtocol?
+    private var debugObserver: NSObjectProtocol?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // With keep-alive on, only the instance launchd started stays.
+        BackgroundAgent.settleInstances()
         Pref.register()
+        FocusImport.runOnce()
 
-        let controller = PanelController(store: store, model: model, swipe: swipe, settings: settings)
+        let controller = PanelController(store: store, model: model, swipe: swipe, settings: settings, focus: focus)
         self.controller = controller
 
         swipe.install(in: controller.panel) { [weak self] id, direction in
@@ -53,7 +59,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
-        model.settingsHandler = { [weak self] in self?.showSettings(.tasks) }
+        model.settingsHandler = { [weak self] tab in self?.showSettings(tab) }
+
+        focus.focusedTask = { [weak self] in
+            guard let store = self?.store, let session = store.focus else { return nil }
+            return store.task(session.taskID)
+        }
+        focus.onCompleteTask = { [weak self] id in
+            withAnimation(.snappy) { self?.store.complete(id) }
+        }
+        focus.onCurtainChange = { [weak self] up in self?.island?.setCurtained(up) }
+        focus.onPassesChange = { [weak self] in self?.island?.focusChanged() }
+        store.onFocusEnded = { [weak self] session in self?.focus.taskFocusEnded(session) }
+        focus.start()
+
+        status.onAlert = { [weak self] alert in self?.island?.showAlert(alert) ?? false }
+        status.onOpenSettings = { [weak self] in self?.showSettings(.status) }
+        status.start()
 
         applyIslandPreference()
         defaultsObserver = NotificationCenter.default.addObserver(
@@ -62,6 +84,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             MainActor.assumeIsolated { self?.applyIslandPreference() }
         }
 
+        #if DEBUG
+        debugObserver = installDebugHooks()
+        #endif
+
         let updater = Updater.shared
         updater.onUpdateFound = { [weak self] release in
             self?.store.announce(tr("Perch \(release.version) 可以更新了，在 ⋯ 菜单中安装", "Perch \(release.version) is available. Install it from the ⋯ menu"), undo: nil)
@@ -69,7 +95,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         updater.start()
     }
 
+    /// A running strict schedule can't be escaped by quitting (an update still gets through).
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard focus.blocksQuit else { return .terminateNow }
+        NSSound.beep()
+        return .terminateCancel
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
+        focus.shutdown()
         store.saveNow()
     }
 
@@ -79,7 +113,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let tabs = NSTabViewController()
             tabs.tabStyle = .toolbar
             for page in SettingsTab.allCases {
-                let hosting = NSHostingController(rootView: SettingsPane(tab: page).environment(settings).environment(Updater.shared))
+                let hosting = NSHostingController(rootView: SettingsPane(tab: page)
+                    .environment(settings)
+                    .environment(Updater.shared)
+                    .environment(focus))
                 hosting.sizingOptions = .preferredContentSize
                 hosting.title = page.title
                 let item = NSTabViewItem(viewController: hosting)
@@ -111,6 +148,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// The Mac's status: in the card under the island, or under the menu bar without the island.
+    func openStatus() {
+        if let island {
+            island.openStatus()
+        } else {
+            status.showPanel()
+        }
+    }
+
     func toggleTasks() {
         if let island, island.hostsTasks {
             island.toggleTaskList()
@@ -125,14 +171,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func applyIslandPreference() {
         let enabled = UserDefaults.standard.bool(forKey: Pref.islandEnabled)
         if enabled, island == nil {
-            let island = IslandController(store: store, swipe: swipe)
+            let island = IslandController(store: store, swipe: swipe, focus: focus, status: status)
             island.onOpenSettings = { [weak self] tab in self?.showSettings(tab) }
+            island.setCurtained(focus.isCurtained)
             self.island = island
         } else if !enabled, let island {
             island.shutdown()
             self.island = nil
         }
         controller?.setSuspended(island != nil && TaskStyle.current != .floating)
+        focus.islandShowsPasses = island != nil
         let quiet = island != nil && UserDefaults.standard.bool(forKey: Pref.islandReminders)
         if reminders.deliversQuietly != quiet {
             reminders.deliversQuietly = quiet

@@ -39,6 +39,8 @@ final class Updater {
     }
 
     @ObservationIgnored var onUpdateFound: ((AppRelease) -> Void)?
+    /// Quitting to install an update; a strict Focus schedule lets this one quit through.
+    @ObservationIgnored private(set) var isRelaunching = false
     @ObservationIgnored private var scheduleTask: Task<Void, Never>?
 
     private enum Keys {
@@ -103,6 +105,7 @@ final class Updater {
                 throw UpdateError.notWritable(destination.deletingLastPathComponent().path)
             }
             try Self.launchInstaller(newApp: newApp, destination: destination, work: work)
+            isRelaunching = true
             NSApp.terminate(nil)
         } catch {
             try? FileManager.default.removeItem(at: work)

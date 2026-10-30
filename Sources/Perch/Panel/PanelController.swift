@@ -26,7 +26,7 @@ final class PanelController: NSObject, NSWindowDelegate {
     private var ignoresMoves = false
     private var isSuspended = false
 
-    init(store: TaskStore, model: PanelModel, swipe: SwipeTracker, settings: AppSettings) {
+    init(store: TaskStore, model: PanelModel, swipe: SwipeTracker, settings: AppSettings, focus: FocusController) {
         self.store = store
         self.model = model
         super.init()
@@ -38,6 +38,7 @@ final class PanelController: NSObject, NSWindowDelegate {
             .environment(settings)
             .environment(Updater.shared)
             .environment(Feedback.shared)
+            .environment(focus)
         let hosting = NSHostingView(rootView: root)
         hosting.sizingOptions = []
         panel.contentView = hosting

@@ -30,7 +30,7 @@ struct BannerView: View {
         case .device(let device, let connected): DeviceWings(device: device, connected: connected)
         case .power(let event): PowerWings(event: event)
         case .route(let route): RouteWings(route: route)
-        case .track, .reminder: EmptyView()
+        case .track, .reminder, .alert: EmptyView()
         }
     }
 
@@ -39,6 +39,7 @@ struct BannerView: View {
         switch banner {
         case .track: TrackBanner()
         case .reminder(let task, let alsoDue): ReminderBanner(task: task, alsoDue: alsoDue)
+        case .alert(let alert): AlertBanner(alert: alert)
         case .level, .device, .power, .route: EmptyView()
         }
     }
@@ -267,6 +268,48 @@ private struct ReminderBanner: View {
         let time = task.schedule?.time.map(settings.formatTime) ?? ""
         let due = tr("\(time) · 到时间了", "\(time) · Due now")
         return alsoDue > 0 ? due + tr(" · 另有 \(alsoDue) 项", " · \(alsoDue) more") : due
+    }
+}
+
+/// Something about the Mac worth a look, with the one thing to do about it.
+private struct AlertBanner: View {
+    let alert: SystemAlert
+    @Environment(IslandModel.self) private var model
+    @State private var pulse = false
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: alert.symbol)
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(tint)
+                .symbolEffect(.pulse, options: .repeat(2), value: pulse)
+                .frame(width: 28)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(alert.title)
+                    .font(.system(size: 13, weight: .semibold))
+                Text(alert.detail)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.white.opacity(0.55))
+            }
+            .lineLimit(1)
+            .help(alert.detail)
+            Spacer(minLength: 4)
+            ReminderButton(title: actionTitle, isProminent: true) { model.alertHandler?(alert) }
+        }
+        .onAppear { pulse.toggle() }
+    }
+
+    private var tint: Color {
+        switch alert.kind {
+        case .hot, .runaway: .orange
+        case .memory, .disk: .yellow
+        case .battery: .red
+        }
+    }
+
+    private var actionTitle: String {
+        if case .runaway = alert.kind { return tr("退出它", "Quit It") }
+        return tr("查看", "View")
     }
 }
 
