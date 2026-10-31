@@ -20,6 +20,10 @@ if [[ -f Resources/AppIcon.icns ]]; then
 fi
 # Focus's sounds, and the launchd agent that relaunches Perch when it is killed (Focus › keep alive).
 cp -R Resources/Sounds "$APP/Contents/Resources/Sounds"
+# The screenshot line's Chinese, and its Finder service's name.
+cp Resources/Line/zh-Hans.strings "$APP/Contents/Resources/Line-zh-Hans.strings"
+mkdir -p "$APP/Contents/Resources/zh-Hans.lproj"
+cp Resources/Line/ServicesMenu-zh-Hans.strings "$APP/Contents/Resources/zh-Hans.lproj/ServicesMenu.strings"
 mkdir -p "$APP/Contents/Library/LaunchAgents"
 cp Resources/LaunchAgents/*.plist "$APP/Contents/Library/LaunchAgents/"
 # Loaded into /usr/bin/perl at runtime to read Now Playing (see NowPlayingService); sign it on its own.

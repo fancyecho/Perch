@@ -53,7 +53,7 @@ enum CardMode: Equatable {
 
 /// The detail under the status page's gauges.
 enum StatusMetric: Equatable {
-    case cpu, memory, temperature, network, disk
+    case cpu, memory, temperature, network
 }
 
 enum ReminderAction {
@@ -218,7 +218,9 @@ final class IslandModel {
     static let peekRowHeight: CGFloat = 34
     static let panelSize = CGSize(width: 368, height: 560)
     /// The open island on its status page: gauges and a detail strip under them.
-    static let statusDrop: CGFloat = 134
+    static let statusDrop: CGFloat = 174
+    /// The status page is a little wider than the player, so its four gauges have room.
+    static let statusExtraWidth: CGFloat = 36
 
     var geometry: NotchGeometry
     var isExpanded = false
@@ -304,7 +306,8 @@ final class IslandModel {
         case .expanded:
             // Tasks stay off the lock screen, so there it's only ever the player.
             let drop = page == .status && showsStatusDetail ? Self.statusDrop : taskStyle == .merged && !isLocked ? Self.expandedDrop : Self.playerDrop
-            return IslandLayout(body: CGSize(width: max(notch.width + Self.expandedExtraWidth, 340), height: notch.height + drop), shoulder: 12, cornerRadius: 26, shadowOpacity: 0.55)
+            let wider = page == .status && showsStatusDetail ? Self.statusExtraWidth : 0
+            return IslandLayout(body: CGSize(width: max(notch.width + Self.expandedExtraWidth, 340) + wider, height: notch.height + drop), shoulder: 12, cornerRadius: 26, shadowOpacity: 0.55)
         case .tasks:
             return IslandLayout(body: CGSize(width: Self.taskPanel.width, height: notch.height + Self.taskPanel.height), shoulder: 14, cornerRadius: 30, shadowOpacity: 0.55)
         }

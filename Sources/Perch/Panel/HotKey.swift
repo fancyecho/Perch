@@ -5,6 +5,9 @@ import SwiftUI
 /// System-wide shortcut via Carbon, which needs no Accessibility permission.
 /// Registration fails when another app already owns the same combination.
 final class GlobalHotKey {
+    /// "PRCH", telling Perch's shortcuts from anyone else's in the app.
+    nonisolated static let signature = OSType(0x5052_4348)
+
     private var hotKeyRef: EventHotKeyRef?
     private var handlerRef: EventHandlerRef?
     /// Each shortcut sees every hot key event of the app, so it answers only to its own id.
@@ -28,7 +31,7 @@ final class GlobalHotKey {
     func register(_ combo: HotKeyCombo?) -> HotKeyStatus {
         unregister()
         guard let combo else { return .disabled }
-        let hotKeyID = EventHotKeyID(signature: OSType(0x5052_4348), id: id)
+        let hotKeyID = EventHotKeyID(signature: Self.signature, id: id)
         let status = RegisterEventHotKey(combo.keyCode, combo.modifiers, hotKeyID, GetApplicationEventTarget(), 0, &hotKeyRef)
         if status != noErr { hotKeyRef = nil }
         return status == noErr ? .registered : .unavailable
@@ -61,7 +64,8 @@ nonisolated private func hotKeyCallback(_: EventHandlerCallRef?, _ event: EventR
     var hotKeyID = EventHotKeyID()
     let status = GetEventParameter(event, EventParamName(kEventParamDirectObject), EventParamType(typeEventHotKeyID),
                                    nil, MemoryLayout<EventHotKeyID>.size, nil, &hotKeyID)
-    guard status == noErr else { return OSStatus(eventNotHandledErr) }
+    // The screenshot line registers shortcuts of its own, numbered from 1 too.
+    guard status == noErr, hotKeyID.signature == GlobalHotKey.signature else { return OSStatus(eventNotHandledErr) }
     let id = hotKeyID.id
     let pressed = GetEventKind(event) == UInt32(kEventHotKeyPressed)
     let hotKey = Unmanaged<GlobalHotKey>.fromOpaque(context).takeUnretainedValue()

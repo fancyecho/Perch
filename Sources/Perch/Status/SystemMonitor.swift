@@ -149,10 +149,6 @@ final class SystemMonitor {
     /// Memory in use (%) and CPU temperature (°C), for the island's charts.
     private(set) var memoryHistory: [Double] = []
     private(set) var temperatureHistory: [Double] = []
-    /// Disk reads and writes (bytes/s), only while something shows them.
-    private(set) var diskReadHistory: [Double] = []
-    private(set) var diskWriteHistory: [Double] = []
-    private var lastDiskPush: TimeInterval = 0
     private(set) var batteryEstimate: BatteryEstimate?
     private(set) var systemPowerHistory: [Double] = []
     /// Recent battery power for estimating charge and remaining time (timestamped, recorded with the panel closed too).
@@ -287,17 +283,6 @@ final class SystemMonitor {
             Self.push(network.up, to: &upHistory)
             Self.push(memory.usedPercent, to: &memoryHistory)
             if let celsius = temperature?.cpu { Self.push(celsius, to: &temperatureHistory) }
-            if active {
-                // Disk rates go unsampled while nothing shows them; don't join the old curve to new data.
-                let now = ProcessInfo.processInfo.systemUptime
-                if now - lastDiskPush > prefs.interval * 3 {
-                    diskReadHistory.removeAll()
-                    diskWriteHistory.removeAll()
-                }
-                lastDiskPush = now
-                Self.push(disk.read, to: &diskReadHistory)
-                Self.push(disk.write, to: &diskWriteHistory)
-            }
         }
         if !full { tickCount += 1 }
 

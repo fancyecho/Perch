@@ -109,7 +109,7 @@ private struct CapsuleRow: View {
                             .transition(.capsuleRoll)
                     }
                 }
-                .animation(.smooth(duration: 0.55), value: showsClock)
+                .animation(.smooth(duration: 0.4), value: showsClock)
                 .offset(x: model.capsuleSwipe)
             }
         }
@@ -316,7 +316,10 @@ private struct CapsuleMenu: View {
     }
 }
 
-/// The task and the time trade places in the capsule by rolling upward, like a split-flap.
+/// The task and the time trade places in the capsule by rolling upward, like a split-flap, one
+/// after the other: the outgoing line lifts away quickly, and only then does the incoming one rise
+/// into place. Overlapping, the two crossed each other, and while the capsule grew under the pointer
+/// the outgoing one drifted sideways with it.
 private struct CapsuleRoll: ViewModifier {
     let offset: CGFloat
     let active: Bool
@@ -324,7 +327,7 @@ private struct CapsuleRoll: ViewModifier {
     func body(content: Content) -> some View {
         content
             .offset(y: offset)
-            .blur(radius: active ? 4 : 0)
+            .blur(radius: active ? 3 : 0)
             .opacity(active ? 0 : 1)
     }
 }
@@ -332,8 +335,10 @@ private struct CapsuleRoll: ViewModifier {
 extension AnyTransition {
     static var capsuleRoll: AnyTransition {
         .asymmetric(
-            insertion: .modifier(active: CapsuleRoll(offset: 12, active: true), identity: CapsuleRoll(offset: 0, active: false)),
-            removal: .modifier(active: CapsuleRoll(offset: -12, active: true), identity: CapsuleRoll(offset: 0, active: false))
+            insertion: .modifier(active: CapsuleRoll(offset: 9, active: true), identity: CapsuleRoll(offset: 0, active: false))
+                .animation(.spring(duration: 0.42, bounce: 0.12).delay(0.13)),
+            removal: .modifier(active: CapsuleRoll(offset: -7, active: true), identity: CapsuleRoll(offset: 0, active: false))
+                .animation(.easeIn(duration: 0.15))
         )
     }
 }

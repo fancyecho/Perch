@@ -255,6 +255,21 @@ final class IslandController {
         updateStatusWatch()
     }
 
+    /// The stretch of `screen` (in screen coordinates) the island and the capsule under it take at
+    /// rest, with room either side, for the screenshot line to hang clear of; nil on other screens.
+    func middle(on screen: NSScreen) -> ClosedRange<CGFloat>? {
+        let frame = model.geometry.screenFrame
+        guard screen.frame == frame else { return nil }
+        let rest = model.layout(for: model.restState, hovering: false)
+        var width = rest.width
+        if model.taskStyle == .capsule {
+            // The capsule as it grows under the pointer.
+            width = max(width, max(rest.width - rest.shoulder * 2, IslandModel.capsuleMinWidth) + 16)
+        }
+        let half = width / 2 + 20
+        return (frame.midX - half)...(frame.midX + half)
+    }
+
     /// The shortcut's way in and out: opened this way it stays open, wherever the pointer is, until
     /// the shortcut is pressed again or the pointer passes over it and leaves.
     func toggleExpanded() {

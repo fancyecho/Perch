@@ -3,7 +3,7 @@ import SwiftUI
 
 /// The pages of Settings, shown under a toolbar of tabs.
 enum SettingsTab: Int, CaseIterable {
-    case general, tasks, focus, status, island, help
+    case general, tasks, focus, status, island, line, help
 
     var title: String {
         switch self {
@@ -12,6 +12,7 @@ enum SettingsTab: Int, CaseIterable {
         case .focus: tr("专注", "Focus")
         case .status: tr("状态", "Status")
         case .island: tr("灵动岛", "Island")
+        case .line: tr("晾衣绳", "Line")
         case .help: tr("帮助", "Help")
         }
     }
@@ -23,6 +24,7 @@ enum SettingsTab: Int, CaseIterable {
         case .focus: "lamp.desk"
         case .status: "gauge.with.dots.needle.67percent"
         case .island: "rectangle.topthird.inset.filled"
+        case .line: "tshirt"
         case .help: "questionmark.circle"
         }
     }
@@ -35,6 +37,7 @@ enum SettingsTab: Int, CaseIterable {
         case .focus: 720
         case .status: 640
         case .island: 660
+        case .line: 700
         case .help: 600
         }
     }
@@ -51,6 +54,7 @@ struct SettingsPane: View {
             case .focus: FocusPane()
             case .status: StatusPane()
             case .island: IslandPane()
+            case .line: LinePane()
             case .help: HelpPane()
             }
         }
@@ -346,6 +350,15 @@ private struct HelpPane: View {
                 ReferenceRow(example: tr("专注横幅上的台灯按钮", "The lamp on a task's focus banner"), meaning: tr("离开电脑去做这项任务", "Step away to do that task"))
                 ReferenceRow(example: tr("拦截界面上按住按钮 3 秒", "Hold the button on the shield for 3 s"), meaning: tr("温和时段里再用 5 分钟", "Five more minutes (gentle schedules)"))
                 ReferenceRow(example: tr("展开刘海上的倒计时", "Open the countdown at the notch"), meaning: tr("提前结束临时使用", "End a pass early"))
+            }
+
+            Section(tr("晾衣绳", "Line")) {
+                ReferenceRow(example: tr("点一下 · 双击 · 按住", "Click · double click · press and hold"), meaning: tr("复制 · 用预览打开 · 标记", "Copy · open in Preview · mark up"))
+                ReferenceRow(example: tr("拖进 App · 拖进文件夹 · 拖到废纸篓或点叉", "Drag into an app · into a folder · to the Trash, or the cross"), meaning: tr("发一份 · 存进去并取下 · 丢掉", "Send a copy · keep it there · let it go"))
+                ReferenceRow(example: tr("指针在照片上按空格 · ⌫ · 在绳上按 ⌘Z", "Space · ⌫ on a photo · ⌘Z on the line"), meaning: tr("快速查看 · 丢掉 · 挂回刚丢的", "Quick Look · let it go · hang it back"))
+                ReferenceRow(example: tr("右键 › 固定 · 拿在手上", "Right-click › Pin · Hold"), meaning: tr("钉在左边不被挤掉 · 取下放在眼前", "Keep it at the left · hold it in front of you"))
+                ReferenceRow(example: tr("访达里右键图片 › 服务 › Hang on Perch", "In Finder, right-click an image › Services › Hang on Perch"), meaning: tr("把任意图片挂上绳", "Hang any image on the line"))
+                ReferenceRow(example: tr("指针顶到屏幕上沿（正中除外）· ⌃⌥T", "Push against the top edge (not the middle) · ⌃⌥T"), meaning: tr("放下 / 收起晾衣绳", "Bring the line down / put it away"))
             }
 
             Section(tr("状态", "Status")) {

@@ -29,6 +29,20 @@ private struct MenuBarContent: View {
         Divider()
         FocusMenuItems()
         Button(tr("系统状态面板", "System Status Panel")) { app.status.showPanel() }
+        if let line = app.line {
+            Menu(tr("晾衣绳", "Line")) {
+                Button(tr("显示 / 隐藏", "Show / Hide")) { line.toggleLine() }
+                Button(tr("全部取下", "Take Everything Down")) { line.takeEverythingDown() }
+                    .disabled(line.isEmpty)
+                Button(tr("挂回刚取下的", "Put Back")) { line.putBackLast() }
+                    .disabled(!line.canPutBack)
+                if line.holdsAny {
+                    Button(tr("全部放回绳上", "Hang Everything Back")) { line.hangEverythingBack() }
+                }
+                Divider()
+                Button(tr("晾衣绳设置…", "Line Settings…")) { app.showSettings(.line) }
+            }
+        }
         Divider()
         Button(tr("设置…", "Settings…")) { app.showSettings() }
             .keyboardShortcut(",")

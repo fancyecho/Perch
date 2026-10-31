@@ -20,6 +20,14 @@ extension AppDelegate {
         case "status": island?.openStatus()
         case "close": island?.closeTaskList()
         case "panel": status.showPanel()
+        case "line": line?.toggleLine()
+        case "hang":
+            // hang:<folder>: everything in it, as new captures.
+            let folder = URL(fileURLWithPath: parts.dropFirst().joined(separator: ":"))
+            let files = (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? []
+            for (i, file) in files.sorted(by: { $0.path < $1.path }).enumerated() {
+                DispatchQueue.main.asyncAfter(deadline: .now() + Double(i) * 0.4) { [weak self] in self?.line?.debugHang(file) }
+            }
         case "tasks": openTasks(focusInput: false)
         case "focustab":
             island?.taskPanel.tab = .focus
@@ -31,7 +39,6 @@ extension AppDelegate {
             case "memory": .memory
             case "temperature": .temperature
             case "network": .network
-            case "disk": .disk
             default: .cpu
             }
             island?.model.metricHandler?(metric)

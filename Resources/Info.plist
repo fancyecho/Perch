@@ -19,7 +19,7 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.4.2</string>
+	<string>0.5.0</string>
 	<key>CFBundleVersion</key>
 	<string>1</string>
 	<key>LSApplicationCategoryType</key>
@@ -32,10 +32,36 @@
 	<string>Perch 读取浏览器当前标签页的网址，才能在专注时段里暂停你设定的网站，不会记录或上传浏览记录。Perch reads the current tab’s address so a Focus schedule can pause the sites you chose; nothing is recorded or sent anywhere.</string>
 	<key>NSBluetoothAlwaysUsageDescription</key>
 	<string>Perch 在刘海灵动岛里显示已连接的蓝牙设备和电量。Perch shows connected Bluetooth devices and their battery in the notch island.</string>
+	<key>NSDesktopFolderUsageDescription</key>
+	<string>Perch 查看 macOS 保存截图的文件夹，把新截图挂到晾衣绳上。Perch watches the folder macOS saves screenshots to, so it can hang them on the line.</string>
+	<key>NSDocumentsFolderUsageDescription</key>
+	<string>Perch 查看你选的文件夹，把新图片挂到晾衣绳上。Perch watches the folder you chose, so it can hang new images on the line.</string>
+	<key>NSDownloadsFolderUsageDescription</key>
+	<string>Perch 查看你选的文件夹，把新图片挂到晾衣绳上。Perch watches the folder you chose, so it can hang new images on the line.</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>NSHumanReadableCopyright</key>
 	<string>Perch</string>
+	<key>NSServices</key>
+	<array>
+		<dict>
+			<key>NSMenuItem</key>
+			<dict>
+				<key>default</key>
+				<string>Hang on Perch</string>
+			</dict>
+			<key>NSMessage</key>
+			<string>hangOnLine</string>
+			<key>NSPortName</key>
+			<string>Perch</string>
+			<key>NSRequiredContext</key>
+			<dict/>
+			<key>NSSendFileTypes</key>
+			<array>
+				<string>public.image</string>
+			</array>
+		</dict>
+	</array>
 	<key>PerchUpdatePublicKey</key>
 	<string>wFYniSeSLifEwROrD9mOhOC0t1Ijq0d2YndLws13Myo=</string>
 	<key>PerchUpdateRepository</key>

@@ -12,11 +12,20 @@ let package = Package(
     targets: [
         .executableTarget(
             name: "Perch",
+            dependencies: ["PerchLine"],
             path: "Sources/Perch",
             swiftSettings: [
                 .defaultIsolation(MainActor.self),
                 .enableUpcomingFeature("NonisolatedNonsendingByDefault"),
             ]
+        ),
+        // The screenshot line, adapted from Tendedero (MIT, see its LICENSE). Kept in its own Swift 5
+        // module, as written, rather than reworked for Perch's strict concurrency.
+        .target(
+            name: "PerchLine",
+            path: "Sources/PerchLine",
+            exclude: ["LICENSE"],
+            swiftSettings: [.swiftLanguageMode(.v5)]
         ),
         .target(
             name: "PerchMediaHelper",

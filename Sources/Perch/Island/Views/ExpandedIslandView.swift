@@ -367,19 +367,20 @@ private struct TimedProgress: View {
     }
 }
 
-/// The island's status page: a quiet line of the battery, headphones and where sound goes, then
-/// the Mac's vital signs as four gauges, and under them the chosen one over the last two minutes.
+/// The island's status page, in four calm rows: the battery and what's connected, the Mac's vital
+/// signs as four gauges, the chosen one over the last two minutes, and how full the disk is.
 private struct StatusGlance: View {
     @Environment(StatusPreferences.self) private var statusPrefs
     /// Whether to say nothing is playing, when there are no gauges to show instead.
     var showsHint = true
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 9) {
+        VStack(alignment: .leading, spacing: 12) {
             StatusHeader()
             if statusPrefs.islandGauges || !showsHint {
                 SystemGauges()
                 StatusDetail()
+                DiskRow()
             } else {
                 HStack(spacing: 7) {
                     Image(systemName: "music.note")
@@ -395,17 +396,16 @@ private struct StatusGlance: View {
     }
 }
 
-/// The battery, the headphones and where the sound goes, as one quiet line, with the disk's free
-/// space at its far end (a click shows the disk below).
+/// The battery, the headphones and where the sound goes, as icons and numbers only; the names are
+/// in the tooltips, so nothing gets cut short.
 private struct StatusHeader: View {
     @Environment(SystemVolume.self) private var volume
     @Environment(BluetoothMonitor.self) private var bluetooth
     @Environment(PowerMonitor.self) private var power
-    @Environment(SystemMonitor.self) private var monitor
-    @Environment(IslandModel.self) private var model
 
     var body: some View {
-        HStack(spacing: 14) {
+        let devices = Array(bluetooth.devices.prefix(3))
+        HStack(spacing: 16) {
             if let battery = power.battery {
                 HStack(spacing: 5) {
                     BatteryGlyph(level: battery.level, isCharging: battery.isPluggedIn && battery.isCharging, tint: battery.tint)
@@ -413,62 +413,38 @@ private struct StatusHeader: View {
                     Text("\(battery.level)%")
                 }
             }
-            ForEach(bluetooth.devices.prefix(2)) { device in
+            ForEach(devices) { device in
                 HStack(spacing: 4) {
                     Image(systemName: device.symbol)
-                    Text(device.battery.main.map { "\($0)%" } ?? device.name)
+                    if let level = device.battery.main { Text("\(level)%") }
                 }
                 .help(device.name)
             }
-            // The output is often one of those devices already; then it isn't listed twice.
+            // The output is often one of those devices already; then it isn't shown twice.
             if !volume.route.name.isEmpty,
-               !bluetooth.devices.prefix(2).contains(where: { $0.name.caseInsensitiveCompare(volume.route.name) == .orderedSame }) {
-                HStack(spacing: 4) {
-                    Image(systemName: bluetooth.refine(volume.route).symbol)
-                    Text(volume.route.name)
-                }
+               !devices.contains(where: { $0.name.caseInsensitiveCompare(volume.route.name) == .orderedSame }) {
+                Image(systemName: bluetooth.refine(volume.route).symbol)
+                    .help(volume.route.name)
             }
-            Spacer(minLength: 8)
-            if monitor.disk.total > 0 {
-                diskButton
-            }
+            Spacer(minLength: 0)
         }
         .font(.system(size: 11, weight: .medium).monospacedDigit())
         .foregroundStyle(.white.opacity(0.62))
         .lineLimit(1)
         .padding(.horizontal, 6)
     }
-
-    private var diskButton: some View {
-        let selected = model.statusMetric == .disk
-        let low = monitor.disk.usedPercent >= 90
-        return Button { model.metricHandler?(.disk) } label: {
-            HStack(spacing: 4) {
-                Image(systemName: "internaldrive")
-                Text(tr("\(Fmt.bytes(monitor.disk.free)) 可用", "\(Fmt.bytes(monitor.disk.free)) free"))
-            }
-            .foregroundStyle(low ? AnyShapeStyle(Color.orange) : AnyShapeStyle(.white.opacity(selected ? 0.9 : 0.62)))
-            .padding(.horizontal, 7)
-            .padding(.vertical, 2)
-            .background(Capsule().fill(Color.white.opacity(selected ? 0.09 : 0)))
-            .contentShape(.capsule)
-            .fixedSize()
-        }
-        .buttonStyle(.plain)
-        .padding(.trailing, -7)
-        .animation(.smooth(duration: 0.25), value: selected)
-        .help(monitor.disk.name)
-        .accessibilityAddTraits(selected ? .isSelected : [])
-    }
 }
 
-/// CPU, memory, temperature and network as small rings; each one picks the detail shown below.
+/// CPU, memory, temperature and network as small rings, each in an equal slot. CPU, memory and
+/// network choose the chart below; temperature is a reading on its own. Each ring stays put in its
+/// slot while its number changes width (spreading them with spacers let every new reading nudge
+/// all four sideways).
 private struct SystemGauges: View {
     @Environment(SystemMonitor.self) private var monitor
     @Environment(IslandModel.self) private var model
 
     var body: some View {
-        HStack(spacing: 4) {
+        HStack(spacing: 6) {
             tile(.cpu) {
                 MiniGauge(symbol: "cpu", fraction: monitor.cpu.usage / 100, value: "\(Fmt.percent(monitor.cpu.usage))%",
                           label: "CPU", tint: tint(Palette.cpu, monitor.cpu.usage))
@@ -479,11 +455,13 @@ private struct SystemGauges: View {
                           tint: monitor.memory.pressureLevel > 1 ? .orange : Palette.memory)
             }
             if let celsius = monitor.temperature?.cpu {
-                tile(.temperature) {
-                    MiniGauge(symbol: celsius >= 75 ? "thermometer.high" : celsius >= 50 ? "thermometer.medium" : "thermometer.low",
-                              fraction: (celsius - 25) / 75, value: "\(Int(celsius.rounded()))°",
-                              label: tr("温度", "Temp"), tint: StatusDetail.temperatureTint(celsius), arc: Self.heat)
-                }
+                MiniGauge(symbol: celsius >= 75 ? "thermometer.high" : celsius >= 50 ? "thermometer.medium" : "thermometer.low",
+                          fraction: (celsius - 25) / 75, value: "\(Int(celsius.rounded()))°",
+                          label: tr("温度", "Temp"), tint: StatusDetail.temperatureTint(celsius), arc: Self.heat)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 5)
+                    .help(monitor.temperature?.gpu.map { "GPU \(Int($0.rounded()))°" } ?? "")
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
             tile(.network) {
                 // Measured against the last two minutes' busiest moment, so the ring shows how busy
@@ -496,19 +474,19 @@ private struct SystemGauges: View {
 
     /// The chosen gauge sits on a faint plate; the others step back a little.
     private func tile<Content: View>(_ metric: StatusMetric, @ViewBuilder content: () -> Content) -> some View {
-        let selected = model.statusMetric == metric
+        let selected = StatusDetail.charted(model.statusMetric) == metric
         return Button { model.metricHandler?(metric) } label: {
             content()
-                .padding(.horizontal, 6)
-                .padding(.vertical, 4)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(RoundedRectangle(cornerRadius: 11, style: .continuous).fill(Color.white.opacity(selected ? 0.09 : 0)))
-                .contentShape(.rect(cornerRadius: 11))
+                .padding(.horizontal, 7)
+                .padding(.vertical, 5)
+                .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.white.opacity(selected ? 0.09 : 0)))
+                .contentShape(.rect(cornerRadius: 12))
         }
         .buttonStyle(.plain)
-        .opacity(selected ? 1 : 0.7)
+        .opacity(selected ? 1 : 0.72)
         .animation(.smooth(duration: 0.25), value: selected)
         .accessibilityAddTraits(selected ? .isSelected : [])
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     /// Temperature along the ring: cool mint where it starts, warming to amber and red as it
@@ -525,64 +503,54 @@ private struct SystemGauges: View {
     }
 }
 
-/// The chosen gauge over the last two minutes: a wide chart, and above it what reading it needs,
-/// the average and the peak of what's drawn, or the totals the ring can't say.
+/// The chosen gauge over the last two minutes: a chart, and above it what reading it needs, the
+/// average and the peak of what's drawn, or the totals the ring can't say.
 private struct StatusDetail: View {
     @Environment(SystemMonitor.self) private var monitor
     @Environment(IslandModel.self) private var model
 
+    /// Only CPU, memory and network have a chart; a heat warning opens on the CPU's.
+    static func charted(_ metric: StatusMetric) -> StatusMetric {
+        metric == .memory || metric == .network ? metric : .cpu
+    }
+
     var body: some View {
-        let facts = facts
-        VStack(alignment: .leading, spacing: 4) {
-            HStack {
-                if model.statusMetric == .disk {
-                    DiskUsageBar(disk: monitor.disk)
-                        .accessibilityLabel(facts.0)
-                } else {
-                    Text(facts.0)
-                        .font(.system(size: 11, weight: .semibold).monospacedDigit())
-                        .foregroundStyle(.white.opacity(0.85))
-                }
-                Spacer(minLength: 8)
+        let metric = Self.charted(model.statusMetric)
+        let facts = facts(metric)
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(facts.0)
+                    .font(.system(size: 11, weight: .semibold).monospacedDigit())
+                    .foregroundStyle(.white.opacity(0.85))
+                Spacer(minLength: 10)
                 Text(facts.1)
                     .font(.system(size: 10.5, weight: .medium).monospacedDigit())
                     .foregroundStyle(facts.2 ?? .white.opacity(0.45))
             }
             .lineLimit(1)
-            chart
-                .frame(height: 28)
+            chart(metric)
+                .frame(height: 30)
         }
         .padding(.horizontal, 6)
-        .id(model.statusMetric)
+        .id(metric)
         .transition(.opacity.animation(.smooth(duration: 0.25)))
     }
 
     @ViewBuilder
-    private var chart: some View {
-        switch model.statusMetric {
-        case .cpu:
-            Sparkline(values: monitor.cpuHistory, maxValue: 100, tint: Palette.cpu)
+    private func chart(_ metric: StatusMetric) -> some View {
+        switch metric {
         case .memory:
             Sparkline(values: monitor.memoryHistory, maxValue: 100, tint: monitor.memory.pressureLevel > 1 ? .orange : Palette.memory)
-        case .temperature:
-            Sparkline(values: monitor.temperatureHistory, maxValue: 100, tint: Self.temperatureTint(monitor.temperature?.cpu ?? 40))
         case .network:
             MirrorChart(top: monitor.downHistory, bottom: monitor.upHistory, topTint: Palette.down, bottomTint: Palette.up)
-        case .disk:
-            MirrorChart(top: monitor.diskReadHistory, bottom: monitor.diskWriteHistory, topTint: Palette.disk, bottomTint: Palette.down)
+        default:
+            Sparkline(values: monitor.cpuHistory, maxValue: 100, tint: Palette.cpu)
         }
     }
 
     /// The headline, the quieter note on the right, and that note's color when it's a warning.
-    private var facts: (String, String, Color?) {
-        switch model.statusMetric {
-        case .cpu:
-            let history = monitor.cpuHistory
-            let average = history.isEmpty ? monitor.cpu.usage : history.reduce(0, +) / Double(history.count)
-            return (tr("平均 \(Fmt.percent(average))% · 峰值 \(Fmt.percent(history.max() ?? monitor.cpu.usage))%",
-                       "Average \(Fmt.percent(average))% · peak \(Fmt.percent(history.max() ?? monitor.cpu.usage))%"),
-                    tr("用户 \(Fmt.percent(monitor.cpu.user))% · 系统 \(Fmt.percent(monitor.cpu.system))%",
-                       "user \(Fmt.percent(monitor.cpu.user))% · system \(Fmt.percent(monitor.cpu.system))%"), nil)
+    private func facts(_ metric: StatusMetric) -> (String, String, Color?) {
+        switch metric {
         case .memory:
             let m = monitor.memory
             let swap = m.swapUsed > 512 * 1_048_576 ? tr(" · 交换 \(Fmt.memory(m.swapUsed))", " · swap \(Fmt.memory(m.swapUsed))") : ""
@@ -592,13 +560,6 @@ private struct StatusDetail: View {
             default: (tr("内存压力正常", "Pressure normal") + swap, nil)
             }
             return (tr("已用 \(Fmt.memory(m.used)) / \(Fmt.memory(m.total))", "\(Fmt.memory(m.used)) of \(Fmt.memory(m.total)) used"), note.0, note.1)
-        case .temperature:
-            guard let t = monitor.temperature, let cpu = t.cpu else {
-                return (tr("读不到温度", "No temperature"), "", nil)
-            }
-            let peak = max(monitor.temperatureHistory.max() ?? cpu, t.cpuMax ?? cpu)
-            return (tr("平均 \(Int(cpu.rounded()))° · 最热 \(Int(peak.rounded()))°", "Average \(Int(cpu.rounded()))° · hottest \(Int(peak.rounded()))°"),
-                    t.gpu.map { "GPU \(Int($0.rounded()))°" } ?? "", cpu >= 90 ? .red : nil)
         case .network:
             let down = monitor.downHistory.max() ?? monitor.network.down
             let up = monitor.upHistory.max() ?? monitor.network.up
@@ -610,12 +571,14 @@ private struct StatusDetail: View {
                 link = tr("有线网络", "Wired")
             }
             return (tr("峰值 ↓ \(Fmt.rate(down))  ↑ \(Fmt.rate(up))", "Peak ↓ \(Fmt.rate(down))  ↑ \(Fmt.rate(up))"), link, nil)
-        case .disk:
-            let d = monitor.disk
-            let used = Fmt.bytes(d.total - d.free), total = Fmt.bytes(d.total)
-            return (tr("已用 \(used) / \(total) · \(Fmt.percent(d.usedPercent))%", "\(used) of \(total) used · \(Fmt.percent(d.usedPercent))%"),
-                    tr("读 \(Fmt.rate(d.read)) · 写 \(Fmt.rate(d.write))", "read \(Fmt.rate(d.read)) · write \(Fmt.rate(d.write))"),
-                    d.usedPercent >= 90 ? .orange : nil)
+        default:
+            let history = monitor.cpuHistory
+            let average = history.isEmpty ? monitor.cpu.usage : history.reduce(0, +) / Double(history.count)
+            let hot = (monitor.temperature?.cpu ?? 0) >= 90
+            return (tr("平均 \(Fmt.percent(average))% · 峰值 \(Fmt.percent(history.max() ?? monitor.cpu.usage))%",
+                       "Average \(Fmt.percent(average))% · peak \(Fmt.percent(history.max() ?? monitor.cpu.usage))%"),
+                    tr("用户 \(Fmt.percent(monitor.cpu.user))% · 系统 \(Fmt.percent(monitor.cpu.system))%",
+                       "user \(Fmt.percent(monitor.cpu.user))% · system \(Fmt.percent(monitor.cpu.system))%"), hot ? .red : nil)
         }
     }
 
@@ -624,14 +587,20 @@ private struct StatusDetail: View {
     }
 }
 
-/// How full the disk is, as a bar with its share beside it; the sizes are in the tooltip.
-private struct DiskUsageBar: View {
-    let disk: DiskSnapshot
+/// How full the disk is: a bar across the page, its share and what's free. The sizes are in the
+/// tooltip.
+private struct DiskRow: View {
+    @Environment(SystemMonitor.self) private var monitor
 
     var body: some View {
+        let disk = monitor.disk
         let fraction = min(max(disk.usedPercent / 100, 0), 1)
-        let tint = disk.usedPercent >= 90 ? Color.orange : Palette.disk
-        HStack(spacing: 7) {
+        // Silver rather than the dashboard's orange, which a busy memory ring already wears.
+        let tint = disk.usedPercent >= 90 ? Color.orange : Color(white: 0.82)
+        HStack(spacing: 8) {
+            Image(systemName: "internaldrive")
+                .font(.system(size: 10.5, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.5))
             Capsule()
                 .fill(Color.white.opacity(0.12))
                 .overlay(alignment: .leading) {
@@ -641,15 +610,17 @@ private struct DiskUsageBar: View {
                             .frame(width: max(proxy.size.height, proxy.size.width * fraction))
                     }
                 }
-                .frame(width: 132, height: 5)
+                .frame(height: 4)
                 .animation(.smooth(duration: 0.6), value: fraction)
-            Text("\(Fmt.percent(disk.usedPercent))%")
-                .font(.system(size: 11, weight: .semibold).monospacedDigit())
-                .foregroundStyle(.white.opacity(0.85))
+            Text(tr("\(Fmt.percent(disk.usedPercent))% · \(Fmt.bytes(disk.free)) 可用", "\(Fmt.percent(disk.usedPercent))% · \(Fmt.bytes(disk.free)) free"))
+                .font(.system(size: 10.5, weight: .medium).monospacedDigit())
+                .foregroundStyle(disk.usedPercent >= 90 ? AnyShapeStyle(Color.orange) : AnyShapeStyle(.white.opacity(0.55)))
                 .fixedSize()
         }
-        .layoutPriority(1)
-        .help(tr("已用 \(Fmt.bytes(disk.total - disk.free)) / \(Fmt.bytes(disk.total))", "\(Fmt.bytes(disk.total - disk.free)) of \(Fmt.bytes(disk.total)) used"))
+        .padding(.horizontal, 6)
+        .opacity(disk.total > 0 ? 1 : 0)
+        .help(tr("\(disk.name) · 已用 \(Fmt.bytes(disk.total - disk.free)) / \(Fmt.bytes(disk.total))",
+                 "\(disk.name) · \(Fmt.bytes(disk.total - disk.free)) of \(Fmt.bytes(disk.total)) used"))
     }
 }
 

@@ -11,6 +11,8 @@ enum Pref {
     static let todayTimeline = "todayTimeline"
     static let chimeStyle = "chimeStyle"
     static let islandEnabled = "islandEnabled"
+    /// The screenshot line along the top of the screen (adapted from Tendedero).
+    static let lineEnabled = "line.enabled"
     static let islandHoverToExpand = "islandHoverToExpand"
     static let islandLevels = "islandLevels"
     static let islandNowPlaying = "islandNowPlaying"
@@ -48,6 +50,7 @@ enum Pref {
             todayTimeline: true,
             chimeStyle: ChimeStyle.perch.rawValue,
             islandEnabled: true,
+            lineEnabled: true,
             islandHoverToExpand: true,
             islandLevels: true,
             islandNowPlaying: true,

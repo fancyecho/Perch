@@ -1,4 +1,6 @@
 import AppKit
+import PerchLine
+import Quartz
 import SwiftUI
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -10,6 +12,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let status = StatusController()
     private(set) var controller: PanelController?
     private(set) var island: IslandController?
+    /// The screenshot line, while it's on.
+    private(set) var line: LineController?
     private var hotKey: GlobalHotKey?
     private var islandHotKey: GlobalHotKey?
     private let reminders = ReminderScheduler()
@@ -82,10 +86,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         status.start()
 
         applyIslandPreference()
+        LineLanguage.isChinese = { AppSettings.shared.isChinese }
+        LineHost.controller = { [weak self] in self?.line }
+        applyLinePreference()
         defaultsObserver = NotificationCenter.default.addObserver(
             forName: UserDefaults.didChangeNotification, object: nil, queue: .main
         ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.applyIslandPreference() }
+            MainActor.assumeIsolated {
+                self?.applyIslandPreference()
+                self?.applyLinePreference()
+            }
         }
 
         #if DEBUG
@@ -107,6 +117,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        // Puts the screenshot settings back, if the line took them over.
+        line?.stop()
         focus.shutdown()
         store.saveNow()
     }
@@ -158,6 +170,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             controller?.toggle()
         }
+    }
+
+    /// The screenshot line comes and goes with its setting; it hangs either side of the island.
+    private func applyLinePreference() {
+        let defaults = UserDefaults.standard
+        if defaults.bool(forKey: Pref.lineEnabled), line == nil {
+            let line = LineController { [weak self] screen in self?.island?.middle(on: screen) }
+            line.start()
+            self.line = line
+        } else if !defaults.bool(forKey: Pref.lineEnabled), let line {
+            line.stop()
+            self.line = nil
+        }
+    }
+
+    // Quick Look asks the responder chain who controls it; the line has no window of its own to
+    // answer, so the app delegate hands it over.
+    nonisolated override func acceptsPreviewPanelControl(_ panel: QLPreviewPanel!) -> Bool {
+        MainActor.assumeIsolated { line != nil }
+    }
+
+    nonisolated override func beginPreviewPanelControl(_ panel: QLPreviewPanel!) {
+        MainActor.assumeIsolated { QuickLook.shared.take(panel) }
+    }
+
+    nonisolated override func endPreviewPanelControl(_ panel: QLPreviewPanel!) {
+        MainActor.assumeIsolated { QuickLook.shared.release(panel) }
     }
 
     /// The notch island comes and goes with its setting. While it holds today's tasks (as a capsule
