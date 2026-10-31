@@ -457,57 +457,6 @@ enum BatterySampler {
         }
     }
 
-    /// --battery-info: prints what was parsed and the raw fields behind it, to check the fields on other models.
-    static func printDiagnostics() {
-        guard let snapshot = sample() else {
-            print("没有找到内置电池")
-            return
-        }
-        print("== 解析结果 ==")
-        print(String(describing: snapshot).replacingOccurrences(of: ", ", with: "\n  "))
-
-        guard let dict = smartBatteryProperties() else {
-            print("读不到 AppleSmartBattery")
-            return
-        }
-        // Only fields about charge and power, never serial numbers and the like.
-        let keys = ["CycleCount", "DesignCycleCount9C", "DesignCapacity", "NominalChargeCapacity", "AppleRawMaxCapacity",
-                    "AppleRawCurrentCapacity", "CurrentCapacity", "MaxCapacity", "Temperature", "VirtualTemperature",
-                    "Voltage", "AppleRawBatteryVoltage", "Amperage", "InstantAmperage", "ExternalConnected",
-                    "IsCharging", "FullyCharged", "RemainingCapacity", "Qmax", "StateOfCharge", "Watts", "Name",
-                    "Description", "Current", "SystemPowerIn", "SystemLoad", "BatteryPower", "SystemVoltageIn",
-                    "SystemCurrentIn", "AdapterEfficiencyLoss"]
-        func dump(_ title: String, _ d: [String: Any]) {
-            print("== \(title) ==")
-            for key in keys.sorted() where d[key] != nil {
-                print("  \(key) = \(d[key]!)")
-            }
-            let nested = d.keys.filter { d[$0] is [String: Any] }.sorted()
-            if !nested.isEmpty { print("  (子字典: \(nested.joined(separator: ", ")))") }
-        }
-        dump("AppleSmartBattery", dict)
-        for name in ["BatteryData", "PowerTelemetryData", "AdapterDetails"] {
-            if let nested = dict[name] as? [String: Any] { dump(name, nested) }
-        }
-        // The charger state and system power info may carry the charge limit; list them as they are (skipping serial-number fields).
-        func dumpAll(_ title: String, _ d: [String: Any]) {
-            print("== \(title) ==")
-            for key in d.keys.sorted() where !key.localizedCaseInsensitiveContains("serial") {
-                if let value = d[key], !(value is [String: Any]), !(value is [Any]) { print("  \(key) = \(value)") }
-            }
-        }
-        if let charger = dict["ChargerData"] as? [String: Any] { dumpAll("ChargerData", charger) }
-        if let blob = IOPSCopyPowerSourcesInfo()?.takeRetainedValue(),
-           let sources = IOPSCopyPowerSourcesList(blob)?.takeRetainedValue() as? [CFTypeRef] {
-            for source in sources {
-                if let info = IOPSGetPowerSourceDescription(blob, source)?.takeUnretainedValue() as? [String: Any] {
-                    dumpAll("IOPowerSources", info)
-                }
-            }
-        }
-        print("== 系统 ==")
-        print("  低电量模式 = \(ProcessInfo.processInfo.isLowPowerModeEnabled)")
-    }
 }
 
 // MARK: - Processes

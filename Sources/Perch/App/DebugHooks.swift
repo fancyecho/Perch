@@ -16,7 +16,7 @@ extension AppDelegate {
         switch parts.first {
         case "expand": island?.expand()
         case "collapse": island?.collapse()
-        case "status": openStatus()
+        case "status": island?.openStatus()
         case "close": island?.closeTaskList()
         case "tasks": openTasks(focusInput: false)
         case "focustab":

@@ -165,40 +165,46 @@ private struct FocusOverview: View {
     @Environment(FocusController.self) private var focus
 
     var body: some View {
-        HStack(alignment: .bottom, spacing: 20) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text(tr("今日专注", "Focused today"))
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.secondary)
-                Text(store.todaySeconds < 60 ? tr("还没开始", "Not yet") : DurationText.long(store.todaySeconds))
-                    .font(.system(size: 26, weight: .bold, design: .rounded))
-                    .monospacedDigit()
-                    .contentTransition(.numericText())
-                if store.streakDays > 0 {
-                    Label(tr("连续 \(store.streakDays) 天", "\(store.streakDays)-day streak"), systemImage: "flame.fill")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(Brand.glow)
-                }
-                Button(action: start) {
-                    HStack(spacing: 8) {
-                        Image(systemName: "lamp.desk.fill")
-                        Text(tr("开始专注", "Start Focus"))
-                        Text(focus.shortcutText).opacity(0.7)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .bottom, spacing: 20) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(tr("今日专注", "Focused today"))
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                    Text(store.todaySeconds < 60 ? tr("还没开始", "Not yet") : DurationText.long(store.todaySeconds))
+                        .font(.system(size: 26, weight: .bold, design: .rounded))
+                        .monospacedDigit()
+                        .contentTransition(.numericText())
+                    if store.streakDays > 0 {
+                        Label(tr("连续 \(store.streakDays) 天", "\(store.streakDays)-day streak"), systemImage: "flame.fill")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(Brand.glow)
                     }
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 8)
-                    .background(Brand.gradient, in: .capsule)
-                    .shadow(color: Brand.glow.opacity(0.35), radius: 8, y: 3)
-                    .contentShape(.capsule)
+                    Button(action: start) {
+                        HStack(spacing: 8) {
+                            Image(systemName: "lamp.desk.fill")
+                            Text(tr("开始专注", "Start Focus"))
+                            Text(focus.shortcutText).opacity(0.7)
+                        }
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 8)
+                        .background(Brand.gradient, in: .capsule)
+                        .shadow(color: Brand.glow.opacity(0.35), radius: 8, y: 3)
+                        .contentShape(.capsule)
+                    }
+                    .buttonStyle(SoftPressStyle())
+                    .padding(.top, 6)
                 }
-                .buttonStyle(SoftPressStyle())
-                .padding(.top, 6)
+                Spacer(minLength: 12)
+                WeekChart(days: store.lastWeek)
+                    .frame(width: 210)
             }
-            Spacer(minLength: 12)
-            WeekChart(days: store.lastWeek)
-                .frame(width: 210)
+            Text(tr("模糊屏幕、专注某项任务、正常进行的时段都算专注；同一时间重叠只算一次，睡眠和合盖不算。", "The blur, focusing on a task and a schedule running as planned all count; overlapping time counts once, sleep doesn't."))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
         .padding(.vertical, 6)
     }

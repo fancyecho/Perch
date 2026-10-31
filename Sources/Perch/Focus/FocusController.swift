@@ -38,8 +38,10 @@ final class FocusController {
     @ObservationIgnored private var lastIdleCheck = Date.now
     /// Launch or the last wake; time away never counts from before it.
     @ObservationIgnored private var lastWake = Date.now
-    /// Blur time already recorded during a task's focus, which the task's own count leaves out.
-    @ObservationIgnored private var overlapCredit: TimeInterval = 0
+    @ObservationIgnored private var focusTimer: Timer?
+    @ObservationIgnored private var lastAccounted = Date.now
+    /// The last moment that went into today's focus, so time is never counted twice.
+    @ObservationIgnored private var countedUntil = Date.distantPast
 
     var shortcutText: String { Self.shortcut.displayString.replacingOccurrences(of: " ", with: "") }
 
@@ -52,10 +54,6 @@ final class FocusController {
             guard let self else { return }
             isCurtained = up
             onCurtainChange?(up)
-        }
-        overlay.onSessionRecorded = { [weak self] seconds in
-            guard let self, focusedTask?() != nil else { return }
-            overlapCredit += seconds
         }
         overlay.onCompleteTask = { [weak self] id in self?.onCompleteTask?(id) }
 
@@ -73,11 +71,16 @@ final class FocusController {
         idleTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.checkIdle() }
         }
+        focusTimer = Timer.scheduledTimer(withTimeInterval: Self.accountingInterval, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.accountFocus() }
+        }
+        focusTimer?.tolerance = 2
         refreshPasses()
     }
 
     func shutdown() {
-        overlay.saveProgress()
+        accountFocus()
+        store.flush()
     }
 
     /// Starts a session now. From a menu it waits for the menu to close first.
@@ -94,11 +97,26 @@ final class FocusController {
         blocker.endPassEarly(key)
     }
 
-    /// A task's focus in Perch ended: it counts toward today, less what the blur already counted.
-    func taskFocusEnded(_ session: FocusSession, at end: Date = .now) {
-        let desk = end.timeIntervalSince(session.startedAt) - overlapCredit
-        overlapCredit = 0
-        store.record(max(0, desk), on: end)
+    // MARK: Today's focus
+
+    private static let accountingInterval: TimeInterval = 10
+
+    /// Whether this moment counts as focus: the blur up and counting, a task being focused on, or a
+    /// schedule running as planned (pausing something, with no pass letting an app through).
+    private var isFocusing: Bool {
+        if overlay.isCounting || focusedTask?() != nil { return true }
+        return passes.isEmpty && schedules.activeOccurrences().contains { !$0.rule.hasNoTargets }
+    }
+
+    /// Adds the time since the last look to today while any kind of focus is on, so a stretch is
+    /// counted once however many of them overlap. A long gap means the Mac slept: none of it counts.
+    private func accountFocus() {
+        let now = Date.now
+        let elapsed = now.timeIntervalSince(lastAccounted)
+        lastAccounted = now
+        guard elapsed > 0, elapsed < Self.accountingInterval * 4, !Displays.areAsleep, isFocusing else { return }
+        store.record(now.timeIntervalSince(max(countedUntil, now.addingTimeInterval(-elapsed))))
+        countedUntil = now
     }
 
     // MARK: The shortcut
@@ -148,6 +166,13 @@ final class FocusController {
     private func showOverlay(since start: Date = .now, playSound: Bool) {
         blocker.yieldToOverlay()
         overlay.show(since: start, task: focusedTask?(), playSound: playSound)
+        // Leaving the Mac counts back to the last touch; take only what nothing has counted yet.
+        accountFocus()
+        let backdated = max(start, countedUntil)
+        if backdated < .now {
+            store.record(Date.now.timeIntervalSince(backdated))
+            countedUntil = .now
+        }
     }
 
     #if DEBUG

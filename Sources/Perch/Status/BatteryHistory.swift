@@ -26,21 +26,6 @@ final class BatteryHistory {
         }
     }
 
-    /// Made-up history for STATUS_DEMO: discharging by day, one charge at noon, a gap for sleep at night; never touches the file.
-    static func demo(now: Date = Date()) -> BatteryHistory {
-        let history = BatteryHistory(url: nil)
-        var percent = 92.0
-        for step in stride(from: 288, through: 0, by: -1) {
-            let time = now.addingTimeInterval(-Double(step) * spacing)
-            let hour = Double(288 - step) / 12
-            if (6.5...9).contains(hour) { continue }   // Asleep
-            let charging = (13.0...14.5).contains(hour)
-            percent = charging ? min(percent + 3.2, 100) : max(percent - 0.55, 8)
-            history.points.append(Point(time: time, percent: Int(percent), charging: charging))
-        }
-        return history
-    }
-
     /// Beside the tasks; the first time, the standalone Status app's record comes along.
     nonisolated private static var defaultURL: URL? {
         guard let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else { return nil }

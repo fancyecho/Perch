@@ -250,6 +250,7 @@ private struct MediaColumn: View {
                 IslandButton(symbol: "forward.fill", size: 12, label: tr("下一首", "Next")) { media.send(.next) }
             }
             .frame(maxWidth: .infinity)
+            .overlay(alignment: .trailing) { OutputPicker() }
             .padding(.top, 6)
         }
     }
@@ -299,6 +300,41 @@ private struct WidePlayer: View {
     }
 }
 
+/// Where the sound plays, drawn as the device; a click lists the others to send it to.
+private struct OutputPicker: View {
+    @Environment(SystemVolume.self) private var volume
+    @Environment(BluetoothMonitor.self) private var bluetooth
+    @State private var hovering = false
+
+    var body: some View {
+        Menu {
+            Section(tr("输出到", "Play On")) {
+                ForEach(volume.outputs) { output in
+                    Toggle(isOn: Binding(get: { output.id == volume.outputID }, set: { _ in volume.selectOutput(output.id) })) {
+                        Label(output.route.name, systemImage: bluetooth.refine(output.route).symbol)
+                    }
+                }
+            }
+        } label: {
+            Image(systemName: bluetooth.refine(volume.route).symbol)
+                .font(.system(size: 11.5, weight: .semibold))
+                .foregroundStyle(.white.opacity(hovering ? 0.95 : 0.6))
+                .contentTransition(.symbolEffect(.replace))
+                .frame(width: 22, height: 20)
+                .background(Circle().fill(Color.white.opacity(hovering ? 0.12 : 0)))
+                .contentShape(.circle)
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .onHover { hovering = $0 }
+        .animation(.easeOut(duration: 0.15), value: hovering)
+        .help(volume.route.name.isEmpty ? tr("选择输出设备", "Choose where it plays") : tr("正在通过「\(volume.route.name)」播放", "Playing on \(volume.route.name)"))
+        .accessibilityLabel(tr("输出设备", "Output device"))
+    }
+}
+
 private struct TimedProgress: View {
     @Environment(NowPlayingService.self) private var media
 
@@ -307,15 +343,18 @@ private struct TimedProgress: View {
             let duration = media.duration
             let position = media.position(at: context.date)
             HStack(spacing: 8) {
-                Text(Self.format(position))
-                    .frame(width: 34, alignment: .leading)
-                MiniProgress()
-                Text("-" + Self.format(max(duration - position, 0)))
-                    .frame(width: 38, alignment: .trailing)
+                HStack(spacing: 8) {
+                    Text(Self.format(position))
+                        .frame(width: 34, alignment: .leading)
+                    MiniProgress()
+                    Text("-" + Self.format(max(duration - position, 0)))
+                        .frame(width: 38, alignment: .trailing)
+                }
+                .font(.system(size: 10, weight: .medium).monospacedDigit())
+                .foregroundStyle(.white.opacity(0.5))
+                .opacity(duration > 0 ? 1 : 0)
+                OutputPicker()
             }
-            .font(.system(size: 10, weight: .medium).monospacedDigit())
-            .foregroundStyle(.white.opacity(0.5))
-            .opacity(duration > 0 ? 1 : 0)
         }
     }
 

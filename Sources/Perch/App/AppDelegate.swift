@@ -71,7 +71,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         focus.onCurtainChange = { [weak self] up in self?.island?.setCurtained(up) }
         focus.onPassesChange = { [weak self] in self?.island?.focusChanged() }
-        store.onFocusEnded = { [weak self] session in self?.focus.taskFocusEnded(session) }
         focus.start()
 
         status.onAlert = { [weak self] alert in self?.island?.showAlert(alert) ?? false }
@@ -146,15 +145,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             island.openTaskList(focusInput: focusInput)
         } else {
             controller?.go(.panel, focusInput: focusInput)
-        }
-    }
-
-    /// The Mac's status: the island's status page, or the panel under the menu bar without the island.
-    func openStatus() {
-        if let island {
-            island.openStatus()
-        } else {
-            status.showPanel()
         }
     }
 

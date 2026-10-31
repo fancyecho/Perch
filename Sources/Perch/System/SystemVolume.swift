@@ -12,6 +12,12 @@ nonisolated struct AudioRoute: Equatable, Sendable {
     static let speakers = AudioRoute(name: "", symbol: "speaker.wave.2.fill", isPersonal: false)
 }
 
+/// A device sound can go to, for picking where it plays.
+nonisolated struct AudioOutput: Identifiable, Equatable, Sendable {
+    let id: AudioObjectID
+    let route: AudioRoute
+}
+
 /// Volume levels move in the same steps as the system's keys: sixteenths, or sixty-fourths with ⇧⌥.
 nonisolated enum LevelStep {
     static func next(from value: Double, up: Bool, fine: Bool) -> Double {
@@ -28,6 +34,9 @@ final class SystemVolume {
     private(set) var isMuted = false
     private(set) var route = AudioRoute.speakers
     private(set) var canSetVolume = false
+    /// Every device sound can go to, the current one included.
+    private(set) var outputs: [AudioOutput] = []
+    private(set) var outputID = AudioObjectID(kAudioObjectUnknown)
 
     /// Volume or mute changed, whoever changed it.
     @ObservationIgnored var onChange: (() -> Void)?
@@ -36,6 +45,7 @@ final class SystemVolume {
     @ObservationIgnored private var device = AudioObjectID(kAudioObjectUnknown)
     @ObservationIgnored private var defaultDeviceListener: AudioObjectPropertyListenerBlock?
     @ObservationIgnored private var deviceListener: AudioObjectPropertyListenerBlock?
+    @ObservationIgnored private var deviceListListener: AudioObjectPropertyListenerBlock?
     /// What mute restores to on devices that have no mute control of their own.
     @ObservationIgnored private var levelBeforeMute: Double = 0.5
 
@@ -49,6 +59,14 @@ final class SystemVolume {
         }
         AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &address, .main, listener)
         defaultDeviceListener = listener
+        // Headphones and displays come and go; keep the list of outputs current.
+        var devices = Self.address(kAudioHardwarePropertyDevices, scope: kAudioObjectPropertyScopeGlobal)
+        let listListener: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+            MainActor.assumeIsolated { self?.outputs = Self.availableOutputs() }
+        }
+        AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &devices, .main, listListener)
+        deviceListListener = listListener
+        outputs = Self.availableOutputs()
         attach(to: Self.defaultOutputDevice())
     }
 
@@ -59,6 +77,11 @@ final class SystemVolume {
             AudioObjectRemovePropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &address, .main, defaultDeviceListener)
         }
         defaultDeviceListener = nil
+        if let deviceListListener {
+            var devices = Self.address(kAudioHardwarePropertyDevices, scope: kAudioObjectPropertyScopeGlobal)
+            AudioObjectRemovePropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &devices, .main, deviceListListener)
+        }
+        deviceListListener = nil
     }
 
     // MARK: - Changing
@@ -70,6 +93,14 @@ final class SystemVolume {
             setMuted(false)
         }
         setLevel(LevelStep.next(from: level, up: up, fine: fine))
+    }
+
+    /// Sends sound to another device, as picking it in Control Center does.
+    func selectOutput(_ id: AudioObjectID) {
+        guard id != outputID else { return }
+        var device = id
+        var address = Self.address(kAudioHardwarePropertyDefaultOutputDevice, scope: kAudioObjectPropertyScopeGlobal)
+        AudioObjectSetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, UInt32(MemoryLayout<AudioObjectID>.size), &device)
     }
 
     func toggleMute() {
@@ -110,6 +141,7 @@ final class SystemVolume {
     private func attach(to newDevice: AudioObjectID) {
         detach()
         device = newDevice
+        outputID = newDevice
         route = Self.route(of: newDevice)
         var volume = Self.address(kAudioHardwareServiceDeviceProperty_VirtualMainVolume)
         canSetVolume = Self.isSettable(newDevice, &volume)
@@ -173,6 +205,26 @@ final class SystemVolume {
         var address = address(kAudioHardwarePropertyDefaultOutputDevice, scope: kAudioObjectPropertyScopeGlobal)
         AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &device)
         return device
+    }
+
+    /// Visible devices with output streams.
+    private static func availableOutputs() -> [AudioOutput] {
+        var address = address(kAudioHardwarePropertyDevices, scope: kAudioObjectPropertyScopeGlobal)
+        var size: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size) == noErr else { return [] }
+        var ids = [AudioObjectID](repeating: 0, count: Int(size) / MemoryLayout<AudioObjectID>.size)
+        guard AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &ids) == noErr else { return [] }
+        return ids.compactMap { id in
+            var streams = Self.address(kAudioDevicePropertyStreams)
+            var streamSize: UInt32 = 0
+            guard AudioObjectGetPropertyDataSize(id, &streams, 0, nil, &streamSize) == noErr, streamSize > 0 else { return nil }
+            var hidden: UInt32 = 0
+            var hiddenSize = UInt32(MemoryLayout<UInt32>.size)
+            var isHidden = Self.address(kAudioDevicePropertyIsHidden, scope: kAudioObjectPropertyScopeGlobal)
+            if AudioObjectGetPropertyData(id, &isHidden, 0, nil, &hiddenSize, &hidden) == noErr, hidden != 0 { return nil }
+            let route = route(of: id)
+            return route.name.isEmpty ? nil : AudioOutput(id: id, route: route)
+        }
     }
 
     private static func route(of device: AudioObjectID) -> AudioRoute {

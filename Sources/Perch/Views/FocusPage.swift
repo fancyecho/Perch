@@ -99,6 +99,7 @@ private struct FocusHero: View {
                         .contentTransition(.numericText())
                         .lineLimit(1)
                         .minimumScaleFactor(0.8)
+                        .help(tr("模糊屏幕、专注某项任务、正常进行的时段都算专注；同一时间重叠只算一次，睡眠和合盖不算。", "The blur, focusing on a task and a schedule running as planned all count; overlapping time counts once, sleep doesn't."))
                     if focusStore.streakDays > 0 {
                         Label(tr("连续 \(focusStore.streakDays) 天", "\(focusStore.streakDays)-day streak"), systemImage: "flame.fill")
                             .font(.system(size: 11, weight: .semibold))

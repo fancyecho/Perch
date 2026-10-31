@@ -183,6 +183,17 @@ private struct TasksPane: View {
 
 /// The time in the capsule, in Dayline's styles.
 private struct CapsuleClockSection: View {
+    private var clockFooter: String {
+        let exceptions = tr("悬停、专注中、任务逾期或 15 分钟内到期时显示任务；没有任务时一直显示时间。",
+                            "The task shows while hovered, while focusing, or when it's late or due within 15 minutes; with nothing to do it's always the time.")
+        switch CapsuleClockMode(rawValue: mode) ?? .onTheMinute {
+        case .off: return tr("胶囊只显示任务。", "The capsule shows only the task.")
+        case .onTheMinute: return tr("每分钟最后几秒，时间翻上来，看着分钟数字滚过去再换回任务。", "In the last seconds of each minute the time rolls in, its minute turns over, then the task comes back. ") + exceptions
+        case .alternate: return tr("任务 10 秒、时间 5 秒轮流显示。", "Ten seconds of the task, five of the time. ") + exceptions
+        case .always: return tr("胶囊平时是一枚时钟，指上去就翻出任务。", "The capsule is a clock; point at it and the task rolls in. ") + exceptions
+        }
+    }
+
     @AppStorage(Pref.clockMode) private var mode = CapsuleClockMode.onTheMinute.rawValue
     @AppStorage(Pref.clockShowsDate) private var showsDate = true
     @AppStorage(Pref.clockShowsWeekday) private var showsWeekday = true
@@ -198,6 +209,7 @@ private struct CapsuleClockSection: View {
                 Text(tr("关闭", "Off")).tag(CapsuleClockMode.off.rawValue)
                 Text(tr("整分钟前后", "As the minute turns")).tag(CapsuleClockMode.onTheMinute.rawValue)
                 Text(tr("和任务轮流", "Taking turns with the task")).tag(CapsuleClockMode.alternate.rawValue)
+                Text(tr("常显时间，悬停看任务", "Always the time, the task on hover")).tag(CapsuleClockMode.always.rawValue)
             }
             if mode != CapsuleClockMode.off.rawValue {
                 LabeledContent(tr("预览", "Preview")) {
@@ -229,11 +241,7 @@ private struct CapsuleClockSection: View {
         } header: {
             Text(tr("胶囊里的时间", "Time in the Capsule"))
         } footer: {
-            Text(mode == CapsuleClockMode.alternate.rawValue
-                 ? tr("任务 10 秒、时间 5 秒轮流显示。悬停、专注中、任务逾期或 15 分钟内到期时只显示任务；没有任务时一直显示时间。",
-                      "Ten seconds of the task, five of the time. Only the task while hovered, focusing, or when it's late or due within 15 minutes; only the time when there's nothing to do.")
-                 : tr("每分钟最后几秒，时间翻上来，看着分钟数字滚过去再换回任务。悬停、专注中、任务逾期或 15 分钟内到期时只显示任务；没有任务时一直显示时间。",
-                      "In the last seconds of each minute the time rolls in, its minute turns over, then the task comes back. Only the task while hovered, focusing, or when it's late or due within 15 minutes; only the time when there's nothing to do."))
+            Text(clockFooter)
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }

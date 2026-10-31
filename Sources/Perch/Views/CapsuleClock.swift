@@ -8,6 +8,8 @@ enum CapsuleClockMode: String, CaseIterable {
     case onTheMinute
     /// Taking turns: ten seconds of the task, five of the time.
     case alternate
+    /// The capsule is a clock; pointing at it brings the task.
+    case always
 
     /// Whether the time has the capsule at this moment, all else being equal.
     func showsClock(at date: Date) -> Bool {
@@ -19,6 +21,8 @@ enum CapsuleClockMode: String, CaseIterable {
             return second >= 57 || second < 5
         case .alternate:
             return Int(date.timeIntervalSinceReferenceDate) % 15 < 5
+        case .always:
+            return true
         }
     }
 }

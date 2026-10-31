@@ -871,7 +871,8 @@ final class IslandController {
             try? await Task.sleep(for: .milliseconds(220))
             // Moving down onto the capsule keeps the island open; otherwise the capsule would spring
             // back up and slip out from under the pointer.
-            while let self, !Task.isCancelled, self.model.isCardHovering {
+            // So does one of its own menus (such as the output picker) hanging below it.
+            while let self, !Task.isCancelled, self.model.isCardHovering || self.ownMenuOpen {
                 try? await Task.sleep(for: .milliseconds(150))
             }
             guard let self, !Task.isCancelled, !self.model.isHovering else { return }

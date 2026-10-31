@@ -46,8 +46,6 @@ final class FocusOverlay: NSObject {
 
     /// The curtain goes up and comes down; the island steps out of the way meanwhile.
     var onCurtainChange: ((Bool) -> Void)?
-    /// Seconds a finished session counted, for keeping desk focus from counting them twice.
-    var onSessionRecorded: ((TimeInterval) -> Void)?
     /// "Done" in the summary, for the task the session was about.
     var onCompleteTask: ((UUID) -> Void)?
     /// How the Focus shortcut reads, for the hint to hold it.
@@ -256,8 +254,6 @@ final class FocusOverlay: NSObject {
         removeEventMonitor()
 
         let session = model.elapsed()
-        store.record(session)
-        onSessionRecorded?(session)
         model.segmentStart = nil
         model.accumulated = session
 
@@ -318,11 +314,9 @@ final class FocusOverlay: NSObject {
     func debugUnlock() { unlock() }
     #endif
 
-    /// Records a session still running when Perch quits.
-    func saveProgress() {
-        guard isShowing, !isExiting, model.summary == nil else { return }
-        store.record(model.elapsed())
-    }
+    /// The blur is up and counting (not paused while the display sleeps); FocusController adds
+    /// the time to today while it is.
+    var isCounting: Bool { isShowing && !isExiting && model.summary == nil && model.segmentStart != nil }
 
     // MARK: Windows
 
@@ -390,14 +384,12 @@ final class FocusOverlay: NSObject {
         pausedAt = date
     }
 
-    /// Counts on after waking. After a long sleep (the lid closed overnight) what came before is
-    /// recorded and a new session starts, rather than waking to "focused for 9 hours".
+    /// Counts on after waking. After a long sleep (the lid closed overnight) a new session starts,
+    /// rather than waking to "focused for 9 hours".
     @objc private func resumeCounting() {
         guard isShowing, !isExiting, model.segmentStart == nil, !Displays.areAsleep else { return }
         lastTick = .now
         if let pausedAt, Date.now.timeIntervalSince(pausedAt) >= Self.newSessionAfterSleep {
-            store.record(model.accumulated)
-            onSessionRecorded?(model.accumulated)
             model.accumulated = 0
         }
         pausedAt = nil

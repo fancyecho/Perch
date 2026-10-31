@@ -36,6 +36,7 @@ final class FocusStore {
 
     /// "yyyy-MM-dd" in the app's time zone → seconds focused that day.
     private(set) var daily: [String: Double]
+    @ObservationIgnored private var savedAt = Date.distantPast
 
     private init() {
         let defaults = UserDefaults.standard
@@ -55,9 +56,15 @@ final class FocusStore {
         daily = defaults.dictionary(forKey: Keys.daily) as? [String: Double] ?? [:]
     }
 
+    /// Counted every few seconds while focusing, so it's written at most once a minute (and on quit).
     func record(_ seconds: TimeInterval, on date: Date = .now) {
         guard seconds > 0 else { return }
         daily[Self.key(for: date), default: 0] += seconds
+        if Date.now.timeIntervalSince(savedAt) >= 60 { flush() }
+    }
+
+    func flush() {
+        savedAt = .now
         UserDefaults.standard.set(daily, forKey: Keys.daily)
     }
 

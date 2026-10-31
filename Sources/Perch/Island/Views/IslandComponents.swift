@@ -31,26 +31,33 @@ struct ArtworkView: View {
         }
         .frame(width: size, height: size)
         .clipShape(shape)
+        // A hairline keeps dark covers from melting into the black island.
+        .overlay { shape.strokeBorder(Color.white.opacity(0.12), lineWidth: 0.5) }
+        // Paused, the cover steps back a little, as the bars settle into dots.
+        .scaleEffect(media.isPlaying || media.track == nil ? 1 : 0.92)
+        .brightness(media.isPlaying || media.track == nil ? 0 : -0.12)
+        .animation(.spring(duration: 0.45, bounce: 0.25), value: media.isPlaying)
         .animation(.smooth(duration: 0.35), value: media.artwork)
         .offset(x: model.mediaNudge * size * 0.35)
         .rotation3DEffect(.degrees(model.mediaNudge * -18), axis: (x: 0, y: 1, z: 0))
     }
 }
 
-/// A little level meter that dances while something plays and settles into dots when paused.
+/// A little level meter that dances while something plays and settles into dots when paused: thin
+/// bars of light in the artwork's color, brightest in the middle, with a soft glow.
 struct EqualizerBars: View {
     let isPlaying: Bool
     var tint: Color = .white
-    var barCount = 4
-    var barWidth: CGFloat = 3
-    var spacing: CGFloat = 2
+    var barCount = 5
+    var barWidth: CGFloat = 2.4
+    var spacing: CGFloat = 2.2
     var maxHeight: CGFloat = 14
 
     var body: some View {
         EqualizerLayers(isPlaying: isPlaying, color: NSColor(tint), barCount: barCount, barWidth: barWidth, spacing: spacing)
             .frame(width: CGFloat(barCount) * (barWidth + spacing) - spacing, height: maxHeight)
-            .opacity(isPlaying ? 1 : 0.55)
-            .animation(.smooth(duration: 0.3), value: isPlaying)
+            .opacity(isPlaying ? 1 : 0.5)
+            .animation(.smooth(duration: 0.4), value: isPlaying)
             .accessibilityHidden(true)
     }
 }
@@ -74,17 +81,23 @@ private struct EqualizerLayers: NSViewRepresentable {
 }
 
 final class EqualizerNSView: NSView {
-    private let bars: [CALayer]
+    private let bars: [CAGradientLayer]
     private let barWidth: CGFloat
     private var isPlaying = false
+    private var color: NSColor?
 
     init(barCount: Int, barWidth: CGFloat, spacing: CGFloat) {
         self.barWidth = barWidth
-        bars = (0..<barCount).map { _ in CALayer() }
+        bars = (0..<barCount).map { _ in CAGradientLayer() }
         super.init(frame: .zero)
         wantsLayer = true
+        layer?.shadowOffset = .zero
+        layer?.shadowRadius = 2.5
+        layer?.shadowOpacity = 0.55
         for (index, bar) in bars.enumerated() {
             bar.cornerRadius = barWidth / 2
+            bar.startPoint = CGPoint(x: 0.5, y: 0)
+            bar.endPoint = CGPoint(x: 0.5, y: 1)
             bar.frame = CGRect(x: CGFloat(index) * (barWidth + spacing), y: 0, width: barWidth, height: 0)
             layer?.addSublayer(bar)
         }
@@ -109,13 +122,23 @@ final class EqualizerNSView: NSView {
         CATransaction.commit()
     }
 
-    func update(isPlaying playing: Bool, color: NSColor) {
-        bars.forEach { $0.backgroundColor = color.cgColor }
+    func update(isPlaying playing: Bool, color newColor: NSColor) {
+        if newColor != color {
+            color = newColor
+            // Light at the core of each bar, thinning out toward its ends.
+            let core = newColor.blended(withFraction: 0.25, of: .white) ?? newColor
+            let colors = [newColor.withAlphaComponent(0.55).cgColor, core.cgColor, newColor.withAlphaComponent(0.55).cgColor]
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            bars.forEach { $0.colors = colors }
+            layer?.shadowColor = newColor.cgColor
+            CATransaction.commit()
+        }
         guard playing != isPlaying else { return }
         isPlaying = playing
         if playing {
             for (index, bar) in bars.enumerated() {
-                bar.add(Self.dance(for: index), forKey: "dance")
+                bar.add(Self.dance(for: index, of: bars.count), forKey: "dance")
             }
         } else {
             // Freeze each bar where it is, then let it settle into a dot.
@@ -127,7 +150,8 @@ final class EqualizerNSView: NSView {
             }
             CATransaction.commit()
             CATransaction.begin()
-            CATransaction.setAnimationDuration(0.3)
+            CATransaction.setAnimationDuration(0.35)
+            CATransaction.setAnimationTimingFunction(CAMediaTimingFunction(name: .easeOut))
             bars.forEach { $0.transform = restingTransform }
             CATransaction.commit()
         }
@@ -137,17 +161,22 @@ final class EqualizerNSView: NSView {
         CATransform3DMakeScale(1, bounds.height > 0 ? min(barWidth / bounds.height, 1) : 1, 1)
     }
 
-    /// Out-of-step loops of different lengths per bar read as music without listening to any.
-    private static func dance(for index: Int) -> CAKeyframeAnimation {
+    /// Out-of-step loops of different lengths per bar read as music without listening to any; the
+    /// middle bars reach highest, so the meter has a shape rather than a row of equal sticks.
+    private static func dance(for index: Int, of count: Int) -> CAKeyframeAnimation {
         let patterns: [[Double]] = [
-            [0.35, 0.9, 0.5, 1.0, 0.3, 0.75, 0.45, 0.95, 0.35],
-            [0.6, 0.3, 1.0, 0.45, 0.8, 0.35, 0.95, 0.5, 0.6],
-            [0.45, 1.0, 0.35, 0.7, 0.95, 0.4, 0.65, 0.3, 0.45],
-            [0.8, 0.4, 0.7, 0.3, 1.0, 0.55, 0.35, 0.9, 0.8],
+            [0.30, 0.82, 0.45, 1.00, 0.35, 0.70, 0.50, 0.92, 0.30],
+            [0.62, 0.28, 0.95, 0.48, 0.78, 0.32, 0.88, 0.55, 0.62],
+            [0.45, 1.00, 0.38, 0.72, 0.96, 0.42, 0.66, 0.30, 0.45],
+            [0.78, 0.40, 0.70, 0.30, 1.00, 0.55, 0.36, 0.86, 0.78],
+            [0.40, 0.66, 0.30, 0.90, 0.50, 0.78, 0.34, 0.60, 0.40],
         ]
+        let middle = Double(count - 1) / 2
+        let reach = 1 - 0.35 * abs(Double(index) - middle) / max(middle, 1)
         let animation = CAKeyframeAnimation(keyPath: "transform.scale.y")
-        animation.values = patterns[index % patterns.count]
-        animation.duration = 1.9 + Double(index % 4) * 0.27
+        animation.values = patterns[index % patterns.count].map { max(0.18, $0 * reach) }
+        animation.duration = 1.55 + Double((index * 7) % 5) * 0.21
+        animation.timeOffset = Double(index) * 0.37
         animation.calculationMode = .cubic
         animation.repeatCount = .infinity
         animation.isRemovedOnCompletion = false
@@ -390,25 +419,6 @@ extension BatteryState {
         if isPluggedIn { return .green }
         if level <= 20 { return .red }
         return ProcessInfo.processInfo.isLowPowerModeEnabled ? .yellow : .white
-    }
-}
-
-/// A quiet capsule for one piece of status in the open island.
-struct StatusChip<Leading: View>: View {
-    let text: String
-    @ViewBuilder let leading: Leading
-
-    var body: some View {
-        HStack(spacing: 5) {
-            leading
-            Text(text)
-                .lineLimit(1)
-        }
-        .font(.system(size: 11, weight: .medium).monospacedDigit())
-        .foregroundStyle(.white.opacity(0.78))
-        .padding(.horizontal, 8)
-        .padding(.vertical, 4)
-        .background(Capsule().fill(Color.white.opacity(0.08)))
     }
 }
 

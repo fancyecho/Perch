@@ -631,69 +631,7 @@ struct HintBubble: View {
 
 // MARK: - Scrolling
 
-/// A scrolling area in the panel: fixed height, no scroll bars, edges fading while there's more to scroll, corners concentric with the cards.
-struct PanelScrollView<Content: View>: View {
-    @ViewBuilder var content: Content
-    @StateObject private var metrics = ScrollMetricsState()
-    private let space = "panel-scroll"
-
-    /// At least 260 however short the screen, at most 540.
-    static var viewportHeight: CGFloat {
-        min(540, max(260, (NSScreen.main?.visibleFrame.height ?? 800) - 160))
-    }
-
-    var body: some View {
-        let height = Self.viewportHeight
-        ScrollView {
-            content
-                .background {
-                    GeometryReader { geo in
-                        Color.clear.preference(key: ScrollMetricsKey.self,
-                                               value: ScrollMetrics(top: geo.frame(in: .named(space)).minY, height: geo.size.height))
-                    }
-                }
-                .padding(.horizontal, 1)
-                .padding(.bottom, 3)
-        }
-        .coordinateSpace(name: space)
-        .scrollIndicators(.hidden)
-        .frame(height: height)
-        .mask {
-            LinearGradient(stops: [
-                .init(color: metrics.top < -1 ? .clear : .black, location: 0),
-                .init(color: .black, location: 12 / height),
-                .init(color: .black, location: 1 - 12 / height),
-                .init(color: metrics.top + metrics.height > height + 1 ? .clear : .black, location: 1),
-            ], startPoint: .top, endPoint: .bottom)
-        }
-        .clipShape(RoundedRectangle(cornerRadius: Metrics.cardRadius, style: .continuous))
-        .onPreferenceChange(ScrollMetricsKey.self) { value in
-            MainActor.assumeIsolated { metrics.update(value) }
-        }
-    }
-}
-
 @MainActor
-private final class ScrollMetricsState: ObservableObject {
-    @Published private(set) var top: CGFloat = 0
-    @Published private(set) var height: CGFloat = 0
-
-    func update(_ value: ScrollMetrics) {
-        if abs(value.top - top) > 0.5 { top = value.top }
-        if abs(value.height - height) > 0.5 { height = value.height }
-    }
-}
-
-private struct ScrollMetrics: Equatable {
-    var top: CGFloat = 0
-    var height: CGFloat = 0
-}
-
-private struct ScrollMetricsKey: PreferenceKey {
-    static let defaultValue = ScrollMetrics()
-    static func reduce(value: inout ScrollMetrics, nextValue: () -> ScrollMetrics) { value = nextValue() }
-}
-
 // MARK: - Buttons
 
 /// A segmented choice: a light track with the selection sliding between options; unselected options brighten under the pointer.
@@ -777,63 +715,6 @@ private struct SegmentButton: View {
         .animation(.easeOut(duration: 0.12), value: hover.hovering)
         .accessibilityLabel(title)
         .accessibilityAddTraits(selected ? .isSelected : [])
-    }
-}
-
-/// A capsule button: light fill and hairline, brighter under the pointer, smaller when pressed; prominent uses the accent for main actions.
-struct PillButtonStyle: ButtonStyle {
-    var prominent = false
-
-    func makeBody(configuration: Configuration) -> some View {
-        PillFace(pressed: configuration.isPressed, prominent: prominent) { configuration.label }
-    }
-}
-
-private struct PillFace<Label: View>: View {
-    let pressed: Bool
-    let prominent: Bool
-    @ViewBuilder var label: Label
-    @StateObject private var hover = HoverState()
-    @Environment(\.isEnabled) private var enabled
-    @Environment(\.colorScheme) private var scheme
-
-    var body: some View {
-        let shape = Capsule(style: .continuous)
-        let lift = pressed ? 0.14 : hover.hovering ? 0.1 : 0.06
-        label
-            .font(Typeface.ui(11, .medium))
-            .labelStyle(.titleAndIcon)
-            .foregroundStyle(prominent ? Color.white : Color.primary)
-            .padding(.horizontal, 10)
-            .frame(height: 21)
-            .background {
-                if prominent {
-                    shape.fill(Color.accentColor.opacity(pressed ? 0.8 : hover.hovering ? 0.92 : 1))
-                        .shadow(color: Color.accentColor.opacity(0.3), radius: 3, y: 1)
-                } else {
-                    shape.fill(Color.primary.opacity(scheme == .dark ? lift + 0.02 : lift))
-                        .overlay { shape.strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5) }
-                }
-            }
-            .contentShape(shape)
-            .opacity(enabled ? 1 : 0.55)
-            .scaleEffect(pressed ? 0.95 : 1)
-            .animation(.spring(response: 0.22, dampingFraction: 0.7), value: pressed)
-            .animation(.easeOut(duration: 0.12), value: hover.hovering)
-            .onHover { hover.hovering = $0 }
-    }
-}
-
-/// A symbol that keeps turning, for “checking”.
-struct SpinningSymbol: View {
-    let name: String
-    @StateObject private var state = HoverState()
-
-    var body: some View {
-        Image(systemName: name)
-            .rotationEffect(.degrees(state.hovering ? 360 : 0))
-            .animation(.linear(duration: 0.9).repeatForever(autoreverses: false), value: state.hovering)
-            .onAppear { state.hovering = true }
     }
 }
 

@@ -500,18 +500,4 @@ enum TimeZoneText {
             .replacingOccurrences(of: "_", with: " ")
     }
 
-    /// When the zone next switches between standard and daylight time, if it does.
-    static func daylightNote(_ zone: TimeZone, at date: Date = .now) -> String? {
-        guard let next = zone.nextDaylightSavingTimeTransition(after: date) else { return nil }
-        let formatter = DateFormatter()
-        formatter.locale = AppSettings.shared.locale
-        formatter.timeZone = zone
-        formatter.setLocalizedDateFormatFromTemplate("MMMd HH:mm")
-        let when = formatter.string(from: next)
-        return zone.isDaylightSavingTime(for: date)
-            ? tr("正在使用夏令时，\(when) 切回标准时间，时段跟着当地钟表走",
-                 "Daylight saving time ends \(when); schedules follow the local clock")
-            : tr("\(when) 开始夏令时，时段跟着当地钟表走",
-                 "Daylight saving time starts \(when); schedules follow the local clock")
-    }
 }

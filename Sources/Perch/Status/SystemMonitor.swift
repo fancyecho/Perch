@@ -158,7 +158,7 @@ final class SystemMonitor {
     private(set) var batteryPowerHistory: [Double] = []
 
     /// The last 24 hours of charge (saved).
-    let batteryHistory = SystemMonitor.demoMode ? BatteryHistory.demo() : BatteryHistory()
+    let batteryHistory = BatteryHistory()
     private(set) var peripherals: [PeripheralBattery] = []
     private(set) var wifi: WiFiSnapshot?
     private(set) var latency: LatencySnapshot?
@@ -220,13 +220,6 @@ final class SystemMonitor {
         }
     }
 
-    /// Called ahead of opening: samples processes, disk and the panel's other data before the click lands,
-    /// so the panel can open at once instead of waiting for a sample.
-    func prewarm() {
-        guard !panelVisible, ProcessInfo.processInfo.systemUptime - lastFullTick > 1.5 else { return }
-        tick(full: true)
-    }
-
     private func tick(full: Bool = false) {
         if full { lastFullTick = ProcessInfo.processInfo.systemUptime }
         let first = tickCount == 0
@@ -261,7 +254,7 @@ final class SystemMonitor {
             battery = BatterySampler.sample()
             if let battery {
                 recordPower(battery, chart: active && !full)
-                if !Self.demoMode { batteryHistory.record(percent: battery.percent, charging: battery.isCharging) }
+                batteryHistory.record(percent: battery.percent, charging: battery.isCharging)
             }
             batteryEstimate = battery.map(estimate)
         }
@@ -271,7 +264,6 @@ final class SystemMonitor {
         }
         uptime = SystemInfo.uptime
         loadAverage = SystemInfo.loadAverage
-        if Self.demoMode { applyDemoData() }
         if !first {
             alerts.evaluate(battery: battery, temperature: temperature?.cpu, memoryPressure: memory.pressureLevel,
                             disk: disk, processes: sampledProcesses)
@@ -344,34 +336,6 @@ final class SystemMonitor {
         }
     }
 
-    /// STATUS_DEMO=1 fills GPU, temperature and battery with made-up data, to check layouts on Macs without those sensors.
-    private static let demoMode = ProcessInfo.processInfo.environment["STATUS_DEMO"] != nil
-
-    private func applyDemoData() {
-        gpu = Double.random(in: 4...45)
-        let cpuTemp = Double.random(in: 52...60)
-        temperature = TemperatureSnapshot(cpu: cpuTemp, cpuMax: cpuTemp + 7, cpuSensorCount: 10,
-                                          cpuSource: tr("演示数据", "demo data"), gpu: cpuTemp - 4)
-        // Make the digit count jump back and forth, to check the cards keep their height.
-        let wide = tickCount % 2 == 0
-        disk.read = wide ? 123_400_000 : 820
-        disk.write = wide ? 4_560 : 98_700_000
-        // Even ticks pretend to charge, odd ticks run on battery.
-        let system = Double.random(in: 6...11)
-        var b = BatterySnapshot(percent: 78, isCharging: wide, onAC: wide, minutesRemaining: wide ? 72 : 312,
-                                health: 92, cycles: 312, designCycles: 1000, temperature: 31.4,
-                                currentCapacity: 3420, fullCapacity: 4210, designCapacity: 4563,
-                                voltage: 12.61, adapterWatts: wide ? 35 : nil, adapterName: wide ? tr("USB-C 电源适配器", "USB-C Power Adapter") : nil)
-        b.batteryPower = wide ? 18.6 : -system
-        b.amperage = (b.batteryPower ?? 0) / 12.61
-        b.systemPower = system
-        b.adapterPower = wide ? system + 18.6 : nil
-        b.lowPowerMode = tickCount % 4 >= 2
-        b.minutesRemaining = nil   // Pretend the system has no estimate yet, to exercise our own.
-        battery = b
-        recordPower(b, chart: true)
-        batteryEstimate = estimate(b)
-    }
 
     /// The system's estimate first; while it's still calculating, or with a charge limit set, use the average power of the last minute or so:
     /// time = energy still to go in (or left) in Wh ÷ average power in W.
