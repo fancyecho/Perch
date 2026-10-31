@@ -152,6 +152,7 @@ extension HotKeyCombo {
 
 /// Click, then press the new combination. Esc cancels, Delete clears.
 struct HotKeyRecorder: View {
+    var slot = HotKeySlot.tasks
     @Environment(AppSettings.self) private var settings
     @State private var monitor: Any?
     @State private var rejected = 0
@@ -160,12 +161,12 @@ struct HotKeyRecorder: View {
         VStack(alignment: .trailing, spacing: 6) {
             HStack(spacing: 8) {
                 Button(action: toggleRecording) {
-                    Text(settings.isRecordingHotKey ? tr("请按下新的快捷键…", "Press a new shortcut…") : (settings.hotKey?.displayString ?? tr("未设置", "Not set")))
+                    Text(settings.isRecording(slot) ? tr("请按下新的快捷键…", "Press a new shortcut…") : (settings.hotKey(slot)?.displayString ?? tr("未设置", "Not set")))
                         .font(.system(size: 13, weight: .medium).monospaced())
                         .frame(minWidth: 150)
                 }
                 .buttonStyle(.bordered)
-                .tint(settings.isRecordingHotKey ? .accentColor : nil)
+                .tint(settings.isRecording(slot) ? .accentColor : nil)
                 .keyframeAnimator(initialValue: 0.0, trigger: rejected) { content, x in
                     content.offset(x: x)
                 } keyframes: { _ in
@@ -176,10 +177,10 @@ struct HotKeyRecorder: View {
                     }
                 }
 
-                if settings.isRecordingHotKey {
+                if settings.isRecording(slot) {
                     Button(tr("取消", "Cancel"), action: stopRecording)
-                } else if settings.hotKey != .standard {
-                    Button(tr("恢复默认", "Reset")) { settings.hotKey = .standard }
+                } else if settings.hotKey(slot) != standard {
+                    Button(tr("恢复默认", "Reset")) { settings.setHotKey(standard, for: slot) }
                 }
             }
             statusLine
@@ -190,12 +191,12 @@ struct HotKeyRecorder: View {
     @ViewBuilder
     private var statusLine: some View {
         Group {
-            if settings.isRecordingHotKey {
+            if settings.isRecording(slot) {
                 Text(tr("需包含 ⌘、⌥ 或 ⌃；Esc 取消，Delete 清除。若按下无反应，说明该组合已被其他应用占用。",
                         "Use ⌘, ⌥ or ⌃. Esc cancels, Delete clears. No response means another app owns that combination."))
                     .foregroundStyle(.secondary)
             } else {
-                switch settings.hotKeyStatus {
+                switch settings.hotKeyStatus(slot) {
                 case .registered:
                     VStack(alignment: .trailing, spacing: 2) {
                         Label(tr("已注册", "Registered"), systemImage: "checkmark.circle.fill").foregroundStyle(.green)
@@ -216,12 +217,14 @@ struct HotKeyRecorder: View {
         .fixedSize(horizontal: false, vertical: true)
     }
 
+    private var standard: HotKeyCombo { slot == .tasks ? .standard : .islandStandard }
+
     private func toggleRecording() {
-        settings.isRecordingHotKey ? stopRecording() : startRecording()
+        settings.isRecording(slot) ? stopRecording() : startRecording()
     }
 
     private func startRecording() {
-        settings.isRecordingHotKey = true
+        settings.setRecording(true, for: slot)
         monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
             handle(event)
             return nil
@@ -231,7 +234,7 @@ struct HotKeyRecorder: View {
     private func stopRecording() {
         if let monitor { NSEvent.removeMonitor(monitor) }
         monitor = nil
-        if settings.isRecordingHotKey { settings.isRecordingHotKey = false }
+        if settings.isRecording(slot) { settings.setRecording(false, for: slot) }
     }
 
     private func handle(_ event: NSEvent) {
@@ -240,7 +243,7 @@ struct HotKeyRecorder: View {
         case kVK_Escape where flags.isEmpty:
             stopRecording()
         case kVK_Delete where flags.isEmpty, kVK_ForwardDelete where flags.isEmpty:
-            settings.hotKey = nil
+            settings.setHotKey(nil, for: slot)
             stopRecording()
         default:
             guard HotKeyCombo.isAcceptable(keyCode: event.keyCode, flags: flags) else {
@@ -248,7 +251,7 @@ struct HotKeyRecorder: View {
                 NSSound.beep()
                 return
             }
-            settings.hotKey = HotKeyCombo(keyCode: event.keyCode, flags: flags)
+            settings.setHotKey(HotKeyCombo(keyCode: event.keyCode, flags: flags), for: slot)
             stopRecording()
         }
     }

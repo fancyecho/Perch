@@ -69,6 +69,8 @@ final class IslandController {
     private var swipeSurface: SwipeSurface?
     private var swipeTravel = CGSize.zero
     private var swipeArmed = false
+    /// A mouse wheel sends a burst of events per flick; one turn of the page per burst.
+    private var wheelQuietUntil = Date.distantPast
     private var glowTask: Task<Void, Never>?
     private var unlockTask: Task<Void, Never>?
     /// Plays the padlock opening for a moment after the screen unlocks.
@@ -909,7 +911,8 @@ final class IslandController {
     }
 
     private func handleSwipe(_ event: NSEvent) -> NSEvent? {
-        guard event.window === panel, event.hasPreciseScrollingDeltas else { return event }
+        guard event.window === panel else { return event }
+        guard event.hasPreciseScrollingDeltas else { return handleWheel(event) }
         if event.phase.contains(.began) {
             swipeTravel = .zero
             swipeArmed = false
@@ -935,6 +938,24 @@ final class IslandController {
         } else if surface == .capsule {
             followCapsuleSwipe()
         }
+        return nil
+    }
+
+    /// A mouse wheel over the island does what a two-finger swipe does: down opens it and moves to
+    /// the page below, up to the page above (closing it from the first), sideways (a tilting wheel)
+    /// changes the track. It's left alone over the capsule, where a stray roll shouldn't complete
+    /// a task.
+    private func handleWheel(_ event: NSEvent) -> NSEvent? {
+        guard model.isHovering else { return event }
+        // Measured the way the wheel turns, whatever the scrolling direction setting.
+        let inverted = event.isDirectionInvertedFromDevice
+        let dx = inverted ? event.scrollingDeltaX : -event.scrollingDeltaX
+        let dy = inverted ? event.scrollingDeltaY : -event.scrollingDeltaY
+        guard max(abs(dx), abs(dy)) >= 0.5, Date.now >= wheelQuietUntil else { return nil }
+        wheelQuietUntil = Date.now.addingTimeInterval(0.45)
+        // Scale a notch up to the distance a swipe has to travel.
+        swipeTravel = CGSize(width: dx * 100, height: dy * 100)
+        finishIslandSwipe()
         return nil
     }
 

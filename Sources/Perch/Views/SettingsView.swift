@@ -30,7 +30,7 @@ enum SettingsTab: Int, CaseIterable {
     /// Each page is as tall as its content, so the window resizes as the tabs switch.
     var height: CGFloat {
         switch self {
-        case .general: 440
+        case .general: 520
         case .tasks: 720
         case .focus: 720
         case .status: 640
@@ -91,9 +91,12 @@ private struct GeneralPane: View {
                 }
             }
 
-            Section(tr("快捷键", "Shortcut")) {
+            Section(tr("快捷键", "Shortcuts")) {
                 LabeledContent(tr("唤出 / 收起任务", "Show / hide tasks")) {
                     HotKeyRecorder()
+                }
+                LabeledContent(tr("显示 / 关闭灵动岛", "Show / hide the island")) {
+                    HotKeyRecorder(slot: .island)
                 }
             }
 
@@ -251,6 +254,9 @@ private struct CapsuleClockSection: View {
 // MARK: - Notch island
 
 private struct IslandPane: View {
+    @Environment(AppSettings.self) private var settings
+    private var islandShortcut: String? { settings.islandHotKey?.displayString }
+
     @AppStorage(Pref.islandEnabled) private var enabled = true
     @AppStorage(Pref.islandHoverToExpand) private var hoverToExpand = true
     @AppStorage(Pref.islandNowPlaying) private var nowPlaying = true
@@ -267,7 +273,11 @@ private struct IslandPane: View {
     var body: some View {
         Form {
             Section {
-                Toggle(tr("在刘海处显示灵动岛", "Show the island at the notch"), isOn: $enabled)
+                Toggle(isOn: $enabled) {
+                    SettingLabel(tr("在刘海处显示灵动岛", "Show the island at the notch"),
+                                 islandShortcut.map { tr("快捷键 \($0)，可在「通用」里修改", "Shortcut \($0); change it in General") }
+                                    ?? tr("可以在「通用」里设一个快捷键", "A shortcut can be set in General"))
+                }
                 if enabled {
                     Picker(tr("待办显示方式", "Today's tasks"), selection: $taskStyle) {
                         Text(tr("刘海下的胶囊", "Capsule under the notch")).tag(TaskStyle.capsule.rawValue)
@@ -309,6 +319,8 @@ private struct IslandPane: View {
 // MARK: - Help
 
 private struct HelpPane: View {
+    @Environment(AppSettings.self) private var settings
+
     var body: some View {
         Form {
             Section(tr("快速输入", "Quick entry")) {
@@ -329,7 +341,8 @@ private struct HelpPane: View {
             Section(tr("灵动岛", "Island")) {
                 ReferenceRow(example: tr("在刘海上双指左右滑", "Two-finger swipe sideways on the notch"), meaning: tr("下一首 / 上一首", "Next / previous track"))
                 ReferenceRow(example: tr("在刘海上双指下滑", "Two-finger swipe down on the notch"), meaning: tr("展开", "Open"))
-                ReferenceRow(example: tr("展开后双指上下滑 · 点边上的圆点", "Once open, swipe up / down · the dots at the edge"), meaning: tr("切换正在播放 / 系统状态", "Switch Now Playing / Status"))
+                ReferenceRow(example: tr("展开后双指上下滑 · 滚动鼠标滚轮 · 点边上的圆点", "Once open, swipe up / down · scroll the wheel · the dots at the edge"), meaning: tr("切换正在播放 / 系统状态", "Switch Now Playing / Status"))
+                ReferenceRow(example: settings.islandHotKey?.displayString ?? tr("通用里设置的快捷键", "The shortcut set in General"), meaning: tr("显示 / 关闭灵动岛", "Show / hide the island"))
                 ReferenceRow(example: tr("在胶囊上双指右滑 / 左滑", "Two-finger swipe right / left on the capsule"), meaning: tr("完成 / 推迟到明天", "Complete / move to tomorrow"))
                 ReferenceRow(example: tr("右键刘海或胶囊", "Right-click the notch or capsule"), meaning: tr("菜单与设置", "Menu & settings"))
             }

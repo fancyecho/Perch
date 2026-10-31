@@ -11,6 +11,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private(set) var controller: PanelController?
     private(set) var island: IslandController?
     private var hotKey: GlobalHotKey?
+    private var islandHotKey: GlobalHotKey?
     private let reminders = ReminderScheduler()
     private var settingsWindow: NSWindow?
     private var settingsTabs: NSTabViewController?
@@ -41,6 +42,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let hotKey = GlobalHotKey { [weak self] in self?.toggleTasks() }
         self.hotKey = hotKey
         settings.hotKeyRegistrar = { [weak hotKey] combo in hotKey?.register(combo) ?? .unavailable }
+        let islandHotKey = GlobalHotKey(id: 3) { [weak self] in self?.toggleIsland() }
+        self.islandHotKey = islandHotKey
+        settings.islandHotKeyRegistrar = { [weak islandHotKey] combo in islandHotKey?.register(combo) ?? .unavailable }
 
         reminders.activate()
         reminders.onOpen = { [weak self] in self?.openTasks(focusInput: false) }
@@ -146,6 +150,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             controller?.go(.panel, focusInput: focusInput)
         }
+    }
+
+    /// Shows or hides the notch island, as its switch in Settings does.
+    func toggleIsland() {
+        let defaults = UserDefaults.standard
+        defaults.set(!defaults.bool(forKey: Pref.islandEnabled), forKey: Pref.islandEnabled)
+        Haptics.tick()
     }
 
     func toggleTasks() {

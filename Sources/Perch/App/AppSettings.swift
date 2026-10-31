@@ -18,6 +18,13 @@ nonisolated struct HotKeyCombo: Codable, Hashable, Sendable {
     var modifiers: UInt32
 
     static let standard = HotKeyCombo(keyCode: UInt32(kVK_Space), modifiers: UInt32(optionKey))
+    /// Shows and hides the notch island.
+    static let islandStandard = HotKeyCombo(keyCode: UInt32(kVK_ANSI_C), modifiers: UInt32(optionKey))
+}
+
+/// Which global shortcut a recorder edits.
+enum HotKeySlot {
+    case tasks, island
 }
 
 /// Language, time zone and shortcut preferences. Views read these through observation,
@@ -55,6 +62,21 @@ final class AppSettings {
     }
 
     private(set) var hotKeyStatus: HotKeyStatus = .disabled
+
+    /// Shows and hides the island; nil turns the shortcut off.
+    var islandHotKey: HotKeyCombo? {
+        didSet {
+            let data = islandHotKey.flatMap { try? JSONEncoder().encode($0) }
+            UserDefaults.standard.set(data ?? Data(), forKey: Keys.islandHotKey)
+            applyIslandHotKey()
+        }
+    }
+
+    var isRecordingIslandHotKey = false {
+        didSet { applyIslandHotKey() }
+    }
+
+    private(set) var islandHotKeyStatus: HotKeyStatus = .disabled
     private(set) var calendar: Calendar
     private(set) var isChinese: Bool
 
@@ -65,6 +87,9 @@ final class AppSettings {
     @ObservationIgnored var hotKeyRegistrar: ((HotKeyCombo?) -> HotKeyStatus)? {
         didSet { applyHotKey() }
     }
+    @ObservationIgnored var islandHotKeyRegistrar: ((HotKeyCombo?) -> HotKeyStatus)? {
+        didSet { applyIslandHotKey() }
+    }
     @ObservationIgnored private var timeFormatter = DateFormatter()
     @ObservationIgnored private var systemZoneObserver: NSObjectProtocol?
 
@@ -72,6 +97,7 @@ final class AppSettings {
         static let language = "language"
         static let timeZone = "timeZone"
         static let hotKey = "hotKey"
+        static let islandHotKey = "islandHotKey"
     }
 
     private init() {
@@ -82,6 +108,11 @@ final class AppSettings {
             hotKey = data.isEmpty ? nil : (try? JSONDecoder().decode(HotKeyCombo.self, from: data)) ?? .standard
         } else {
             hotKey = .standard
+        }
+        if let data = defaults.data(forKey: Keys.islandHotKey) {
+            islandHotKey = data.isEmpty ? nil : (try? JSONDecoder().decode(HotKeyCombo.self, from: data)) ?? .islandStandard
+        } else {
+            islandHotKey = .islandStandard
         }
         calendar = Calendar(identifier: .gregorian)
         isChinese = true
@@ -118,6 +149,33 @@ final class AppSettings {
         formatter.timeZone = cal.timeZone
         formatter.setLocalizedDateFormatFromTemplate(isChinese ? "HHmm" : "jmm")
         timeFormatter = formatter
+    }
+
+    private func applyIslandHotKey() {
+        guard let islandHotKeyRegistrar else { return }
+        islandHotKeyStatus = islandHotKeyRegistrar(isRecordingIslandHotKey ? nil : islandHotKey)
+    }
+
+    // MARK: Shortcuts by slot, for the recorder
+
+    func hotKey(_ slot: HotKeySlot) -> HotKeyCombo? {
+        slot == .tasks ? hotKey : islandHotKey
+    }
+
+    func setHotKey(_ combo: HotKeyCombo?, for slot: HotKeySlot) {
+        if slot == .tasks { hotKey = combo } else { islandHotKey = combo }
+    }
+
+    func isRecording(_ slot: HotKeySlot) -> Bool {
+        slot == .tasks ? isRecordingHotKey : isRecordingIslandHotKey
+    }
+
+    func setRecording(_ recording: Bool, for slot: HotKeySlot) {
+        if slot == .tasks { isRecordingHotKey = recording } else { isRecordingIslandHotKey = recording }
+    }
+
+    func hotKeyStatus(_ slot: HotKeySlot) -> HotKeyStatus {
+        slot == .tasks ? hotKeyStatus : islandHotKeyStatus
     }
 
     private func applyHotKey() {
