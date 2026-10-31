@@ -148,7 +148,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// The Mac's status: in the card under the island, or under the menu bar without the island.
+    /// The Mac's status: the island's status page, or the panel under the menu bar without the island.
     func openStatus() {
         if let island {
             island.openStatus()

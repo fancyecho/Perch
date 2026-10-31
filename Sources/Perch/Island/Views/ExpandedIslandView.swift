@@ -315,18 +315,18 @@ private struct TimedProgress: View {
     }
 }
 
-/// With nothing playing: the battery, headphones and where sound goes, and the Mac's vital signs,
-/// at a glance.
+/// The island's status page: the battery, headphones and where sound goes, then the Mac's vital
+/// signs as four gauges, and under them the chosen one in a little more depth.
 private struct StatusGlance: View {
     @Environment(SystemVolume.self) private var volume
     @Environment(BluetoothMonitor.self) private var bluetooth
     @Environment(PowerMonitor.self) private var power
     @Environment(StatusPreferences.self) private var statusPrefs
-    /// Whether to say nothing is playing, when there's no gauge row to show instead.
+    /// Whether to say nothing is playing, when there are no gauges to show instead.
     var showsHint = true
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 6) {
                 if let battery = power.battery {
                     StatusChip(text: "\(battery.level)%") {
@@ -338,12 +338,15 @@ private struct StatusGlance: View {
                     StatusChip(text: device.battery.main.map { "\($0)%" } ?? device.name) { Image(systemName: device.symbol) }
                         .help(device.name)
                 }
-                if !volume.route.name.isEmpty {
-                    StatusChip(text: volume.route.name) { Image(systemName: volume.route.symbol) }
+                // The output is often one of those devices already; then it isn't listed twice.
+                if !volume.route.name.isEmpty,
+                   !bluetooth.devices.prefix(2).contains(where: { $0.name.caseInsensitiveCompare(volume.route.name) == .orderedSame }) {
+                    StatusChip(text: volume.route.name) { Image(systemName: bluetooth.refine(volume.route).symbol) }
                 }
             }
             if statusPrefs.islandGauges || !showsHint {
                 SystemGauges()
+                StatusDetail()
             } else {
                 HStack(spacing: 7) {
                     Image(systemName: "music.note")
@@ -359,45 +362,196 @@ private struct StatusGlance: View {
     }
 }
 
-/// CPU, memory, temperature and network as small rings; a click opens the full status.
+/// CPU, memory, temperature and network as small rings; each one picks the detail shown below.
 private struct SystemGauges: View {
     @Environment(SystemMonitor.self) private var monitor
     @Environment(IslandModel.self) private var model
-    @State private var hovering = false
+    @Namespace private var selection
 
     var body: some View {
-        Button { model.statusHandler?() } label: {
-            HStack(spacing: 0) {
+        HStack(spacing: 4) {
+            tile(.cpu) {
                 MiniGauge(symbol: "cpu", fraction: monitor.cpu.usage / 100, value: "\(Fmt.percent(monitor.cpu.usage))%",
                           label: "CPU", tint: tint(Palette.cpu, monitor.cpu.usage))
-                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            tile(.memory) {
                 MiniGauge(symbol: "memorychip", fraction: monitor.memory.usedPercent / 100,
                           value: "\(Fmt.percent(monitor.memory.usedPercent))%", label: tr("内存", "Memory"),
                           tint: monitor.memory.pressureLevel > 1 ? .orange : Palette.memory)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                if let celsius = monitor.temperature?.cpu {
-                    MiniGauge(symbol: "thermometer.medium", fraction: (celsius - 30) / 70, value: "\(Int(celsius.rounded()))°",
-                              label: tr("温度", "Temp"), tint: celsius >= 90 ? .red : celsius >= 75 ? .orange : .mint)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                NetworkGauge(down: monitor.network.down, up: monitor.network.up)
-                    .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 5)
-            .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.white.opacity(hovering ? 0.1 : 0.05)))
-            .contentShape(.rect(cornerRadius: 12))
+            if let celsius = monitor.temperature?.cpu {
+                tile(.temperature) {
+                    MiniGauge(symbol: "thermometer.medium", fraction: (celsius - 30) / 70, value: "\(Int(celsius.rounded()))°",
+                              label: tr("温度", "Temp"), tint: StatusDetail.temperatureTint(celsius))
+                }
+            }
+            tile(.network) {
+                NetworkGauge(down: monitor.network.down, up: monitor.network.up)
+            }
+        }
+        .animation(.snappy(duration: 0.3), value: model.statusMetric)
+    }
+
+    private func tile<Content: View>(_ metric: StatusMetric, @ViewBuilder content: () -> Content) -> some View {
+        let selected = model.statusMetric == metric
+        return Button { model.metricHandler?(metric) } label: {
+            content()
+                .padding(.horizontal, 6)
+                .padding(.vertical, 4)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background {
+                    if selected {
+                        RoundedRectangle(cornerRadius: 11, style: .continuous)
+                            .fill(Color.white.opacity(0.1))
+                            .matchedGeometryEffect(id: "selection", in: selection)
+                    }
+                }
+                .contentShape(.rect(cornerRadius: 11))
         }
         .buttonStyle(.plain)
-        .onHover { hovering = $0 }
-        .animation(.easeOut(duration: 0.15), value: hovering)
-        .help(tr("打开系统状态", "Open System Status"))
-        .accessibilityLabel(tr("系统状态", "System Status"))
+        .opacity(selected ? 1 : 0.72)
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 
     /// Past 90% a gauge turns red.
     private func tint(_ base: Color, _ percent: Double) -> Color {
         percent >= 90 ? Color(red: 1, green: 0.38, blue: 0.36) : base
+    }
+}
+
+/// The chosen gauge in more depth: the last two minutes as a chart, a couple of facts, and what's
+/// using it most (right-click to quit it).
+private struct StatusDetail: View {
+    @Environment(SystemMonitor.self) private var monitor
+    @Environment(IslandModel.self) private var model
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 14) {
+            // The last two minutes fill in from the right; the backing keeps the strip's shape meanwhile.
+            chart
+                .padding(.horizontal, 6)
+                .padding(.vertical, 5)
+                .frame(width: 122, height: 44)
+                .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(Color.white.opacity(0.05)))
+            VStack(alignment: .leading, spacing: 3) {
+                Text(facts.0)
+                    .font(.system(size: 11.5, weight: .semibold).monospacedDigit())
+                    .foregroundStyle(.white.opacity(0.9))
+                Text(facts.1)
+                    .font(.system(size: 10.5).monospacedDigit())
+                    .foregroundStyle(.white.opacity(0.5))
+                footer
+            }
+            .lineLimit(1)
+            .contentTransition(.numericText())
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 6)
+        .id(model.statusMetric)
+        .transition(.opacity.combined(with: .offset(y: 4)))
+    }
+
+    @ViewBuilder
+    private var chart: some View {
+        switch model.statusMetric {
+        case .cpu:
+            Sparkline(values: monitor.cpuHistory, maxValue: 100, tint: Palette.cpu)
+        case .memory:
+            Sparkline(values: monitor.memoryHistory, maxValue: 100, tint: monitor.memory.pressureLevel > 1 ? .orange : Palette.memory)
+        case .temperature:
+            Sparkline(values: monitor.temperatureHistory, maxValue: 100,
+                      tint: Self.temperatureTint(monitor.temperature?.cpu ?? 40))
+        case .network:
+            MirrorChart(top: monitor.downHistory, bottom: monitor.upHistory, topTint: Palette.down, bottomTint: Palette.up)
+        }
+    }
+
+    private var facts: (String, String) {
+        switch model.statusMetric {
+        case .cpu:
+            let load = monitor.loadAverage.first.map { String(format: "%.2f", $0) } ?? "–"
+            return (tr("用户 \(Fmt.percent(monitor.cpu.user))% · 系统 \(Fmt.percent(monitor.cpu.system))%", "User \(Fmt.percent(monitor.cpu.user))% · System \(Fmt.percent(monitor.cpu.system))%"),
+                    tr("\(monitor.cpu.cores.count) 核 · 负载 \(load)", "\(monitor.cpu.cores.count) cores · load \(load)"))
+        case .memory:
+            let m = monitor.memory
+            let pressure = switch m.pressureLevel {
+            case 4: tr("压力严重", "Critical pressure")
+            case 2: tr("压力偏高", "Pressure rising")
+            default: tr("压力正常", "Pressure normal")
+            }
+            return ("\(Fmt.memory(m.used)) / \(Fmt.memory(m.total))", "\(pressure) · " + tr("交换 \(Fmt.memory(m.swapUsed))", "swap \(Fmt.memory(m.swapUsed))"))
+        case .temperature:
+            guard let t = monitor.temperature, let cpu = t.cpu else {
+                return (tr("读不到温度", "No temperature"), tr("这台 Mac 没有可读的传感器", "No readable sensors on this Mac"))
+            }
+            let hottest = t.cpuMax.map { tr(" · 最热 \(Int($0.rounded()))°", " · hottest \(Int($0.rounded()))°") } ?? ""
+            let gpu = t.gpu.map { "GPU \(Int($0.rounded()))°" } ?? tr("\(t.cpuSensorCount) 个传感器", "\(t.cpuSensorCount) sensors")
+            return (tr("CPU 平均 \(Int(cpu.rounded()))°", "CPU \(Int(cpu.rounded()))° average") + hottest, gpu)
+        case .network:
+            let n = monitor.network
+            let link: String
+            if let wifi = monitor.wifi {
+                let rate = wifi.rate >= 1000 ? String(format: "%.1f Gbps", wifi.rate / 1000) : String(format: "%.0f Mbps", wifi.rate)
+                link = "Wi-Fi \(rate)"
+            } else {
+                link = tr("有线或未连接 Wi-Fi", "Wired or no Wi-Fi")
+            }
+            let latency = monitor.latency?.internet.map { tr(" · 延迟 \(Int($0.rounded())) ms", " · \(Int($0.rounded())) ms") } ?? ""
+            return ("↓ \(Fmt.rate(n.down))   ↑ \(Fmt.rate(n.up))", link + latency)
+        }
+    }
+
+    @ViewBuilder
+    private var footer: some View {
+        switch model.statusMetric {
+        case .cpu:
+            if let top = monitor.topByCPU.first { ProcessLine(process: top, value: String(format: "%.0f%%", top.cpu)) }
+        case .memory:
+            if let top = monitor.topByMemory.first { ProcessLine(process: top, value: Fmt.memory(top.memory)) }
+        case .temperature:
+            if let top = monitor.topByCPU.first { ProcessLine(process: top, value: String(format: "%.0f%%", top.cpu)) }
+        case .network:
+            Text(monitor.network.address ?? tr("未连接", "Not connected"))
+                .font(.system(size: 10.5).monospacedDigit())
+                .foregroundStyle(.white.opacity(0.5))
+        }
+    }
+
+    static func temperatureTint(_ celsius: Double) -> Color {
+        celsius >= 90 ? .red : celsius >= 75 ? .orange : .mint
+    }
+}
+
+/// The busiest process: its icon, name and share; right-click to switch to it or quit it.
+private struct ProcessLine: View {
+    let process: ProcessEntry
+    let value: String
+
+    var body: some View {
+        let app = NSRunningApplication(processIdentifier: process.id)
+        HStack(spacing: 5) {
+            Image(nsImage: process.icon)
+                .resizable()
+                .frame(width: 12, height: 12)
+            Text(process.name)
+                .truncationMode(.middle)
+            Text(value)
+                .monospacedDigit()
+                .foregroundStyle(.white.opacity(0.5))
+        }
+        .font(.system(size: 10.5, weight: .medium))
+        .foregroundStyle(.white.opacity(0.75))
+        .contentShape(.rect)
+        .help(tr("占用最多 · 右键可切换或退出", "Using the most · right-click to switch or quit"))
+        .contextMenu {
+            if let app, app.activationPolicy == .regular, app.processIdentifier != ProcessInfo.processInfo.processIdentifier {
+                Button(tr("切换到 \(process.name)", "Switch to \(process.name)")) { app.activate() }
+                Button(tr("退出 \(process.name)", "Quit \(process.name)")) { app.terminate() }
+            }
+            if let url = app?.bundleURL {
+                Button(tr("在访达中显示", "Show in Finder")) { NSWorkspace.shared.activateFileViewerSelecting([url]) }
+            }
+        }
     }
 }
 

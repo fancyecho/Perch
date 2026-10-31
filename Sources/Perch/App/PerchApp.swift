@@ -28,7 +28,7 @@ private struct MenuBarContent: View {
         Toggle(tr("刘海灵动岛", "Notch Island"), isOn: $islandEnabled)
         Divider()
         FocusMenuItems()
-        Button(tr("系统状态", "System Status")) { app.openStatus() }
+        Button(tr("系统状态面板", "System Status Panel")) { app.status.showPanel() }
         Divider()
         Button(tr("设置…", "Settings…")) { app.showSettings() }
             .keyboardShortcut(",")

@@ -104,9 +104,8 @@ final class IslandController {
     /// Whether today's tasks live with the island rather than in the floating pill.
     var hostsTasks: Bool { preferences.taskStyle != .floating }
 
-    /// The full task list is open (the black one in merged style or the glass panel in capsule
-    /// style), or the status card is.
-    private var isListOpen: Bool { model.isShowingTasks || model.cardMode == .panel || model.cardMode == .status }
+    /// The full task list is open: the black one in merged style or the glass panel in capsule style.
+    private var isListOpen: Bool { model.isShowingTasks || model.cardMode == .panel }
     private var isOpen: Bool { model.isExpanded || isListOpen }
 
     init(store: TaskStore, swipe: SwipeTracker, focus: FocusController, status: StatusController) {
@@ -151,6 +150,11 @@ final class IslandController {
         taskPanel.settingsHandler = { [weak self] tab in self?.onOpenSettings?(tab) }
         model.settingsHandler = { [weak self] tab in self?.onOpenSettings?(tab) }
         model.statusHandler = { [weak self] in self?.openStatus() }
+        model.metricHandler = { [weak self] metric in
+            guard let self, self.model.statusMetric != metric else { return }
+            if self.preferences.haptics { Haptics.tick() }
+            withAnimation(.snappy(duration: 0.3)) { self.model.statusMetric = metric }
+        }
         model.pageHandler = { [weak self] page in self?.showPage(page) }
         model.alertHandler = { [weak self] alert in self?.handleAlert(alert) }
         volume.onChange = { [weak self] in self?.showLevel(.volume) }
@@ -223,7 +227,7 @@ final class IslandController {
         media.stop()
         bluetooth.stop()
         power.stop()
-        status.monitor.panelVisible = false
+        status.watch("island", false)
         notchSpace?.remove(panel)
         notchSpace = nil
         panel.orderOut(nil)
@@ -238,12 +242,20 @@ final class IslandController {
         bannerTask?.cancel()
         bluetooth.refreshBatteries()
         if preferences.haptics { Haptics.tick() }
+        let pages = islandPages
+        if !pages.contains(model.page) { model.page = pages[0] }
         withAnimation(Self.open) {
             model.isExpanded = true
             model.banner = nil
         }
         refreshPointer()
         startWatching()
+        updateStatusWatch()
+    }
+
+    /// Processes, disk, Wi-Fi and latency are only sampled while the status page is on screen.
+    private func updateStatusWatch() {
+        status.watch("island", model.isExpanded && model.page == .status && focus.passes.isEmpty)
     }
 
     func collapse() {
@@ -256,6 +268,7 @@ final class IslandController {
             guard let self, !self.model.isExpanded else { return }
             self.model.page = .main
         }
+        updateStatusWatch()
         refreshPointer()
         showPendingReminder()
     }
@@ -276,15 +289,6 @@ final class IslandController {
         collapseTask?.cancel()
         peekTask?.cancel()
         cardFadeTask?.cancel()
-        if model.cardMode == .status {
-            status.monitor.panelVisible = false
-            if preferences.taskStyle == .merged {
-                withAnimation(PanelController.morph) {
-                    model.cardMode = .capsule
-                    model.pinnedCardTop = nil
-                }
-            }
-        }
         if preferences.taskStyle == .merged, !model.isLocked {
             if !model.isShowingTasks {
                 bannerTask?.cancel()
@@ -330,15 +334,11 @@ final class IslandController {
         if model.isShowingTasks {
             withAnimation(Self.close) { model.isShowingTasks = false } completion: { handBackFocus() }
         }
-        if model.cardMode == .panel || model.cardMode == .status {
-            if model.cardMode == .status { status.monitor.panelVisible = false }
+        if model.cardMode == .panel {
             withAnimation(PanelController.morph) {
                 model.cardMode = .capsule
                 model.pinnedCardTop = nil
-            } completion: { [weak self] in
-                handBackFocus()
-                if self?.model.cardMode != .status { self?.status.prefs.page = .overview }
-            }
+            } completion: { handBackFocus() }
         }
         panel.acceptsKey = false
         refreshPointer()
@@ -352,42 +352,18 @@ final class IslandController {
 
     // MARK: - Status
 
-    /// The capsule grows into the Mac's status (in every style: without a capsule, the card comes
-    /// down out of the island on its own).
-    func openStatus() {
+    /// Opens the island on its status page, with one of the details showing. When the island has
+    /// no status page (its gauges are off), the full panel opens under the menu bar instead.
+    func openStatus(_ metric: StatusMetric? = nil) {
         guard !model.isLocked, !model.isCurtained else { return }
-        guard model.cardMode != .status else { return closeTaskList() }
-        dwellTask?.cancel()
-        collapseTask?.cancel()
-        peekTask?.cancel()
-        cardFadeTask?.cancel()
-        if model.isShowingTasks {
-            withAnimation(Self.close) { model.isShowingTasks = false }
-        }
+        if let metric { model.statusMetric = metric }
+        guard islandPages.contains(.status) else { return status.showPanel() }
         if model.isExpanded {
-            withAnimation(Self.close) {
-                model.isExpanded = false
-                model.inlineLevel = nil
-            }
+            showPage(.status)
+        } else {
+            model.page = .status
+            expand()
         }
-        let top = model.layout(for: model.restState, hovering: false).height + IslandModel.capsuleGap
-        withAnimation(PanelController.morph) {
-            model.pinnedCardTop = top
-            model.cardMode = .status
-            model.isCardFaded = false
-        }
-        if preferences.haptics { Haptics.tick() }
-        // Full sampling starts once the card has mostly opened, so the morph stays smooth.
-        Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(350))
-            guard let self, self.model.cardMode == .status else { return }
-            self.status.monitor.panelVisible = true
-        }
-        panel.acceptsKey = true
-        panel.makeKeyAndOrderFront(nil)
-        notchSpace?.add(panel)
-        refreshPointer()
-        startWatching()
     }
 
     /// Shows a Mac alert; false when it should go to Notification Center instead (on the lock screen).
@@ -404,10 +380,12 @@ final class IslandController {
         bannerTask?.cancel()
         withAnimation(Self.close) { model.banner = nil }
         refreshPointer()
-        if case .runaway(let pid) = alert.kind {
-            NSRunningApplication(processIdentifier: pid)?.terminate()
-        } else {
-            openStatus()
+        switch alert.kind {
+        case .runaway(let pid): NSRunningApplication(processIdentifier: pid)?.terminate()
+        case .hot: openStatus(.temperature)
+        case .memory: openStatus(.memory)
+        case .disk: status.showPanel()
+        case .battery: openStatus()
         }
     }
 
@@ -518,7 +496,7 @@ final class IslandController {
 
     private func level(_ kind: LevelKind) -> LevelHUD {
         switch kind {
-        case .volume: LevelHUD(kind: .volume, value: volume.level, isMuted: volume.isMuted, route: volume.route)
+        case .volume: LevelHUD(kind: .volume, value: volume.level, isMuted: volume.isMuted, route: bluetooth.refine(volume.route))
         case .brightness: LevelHUD(kind: .brightness, value: brightness.level)
         case .keyboard: LevelHUD(kind: .keyboard, value: keyboardLight.level)
         }
@@ -552,7 +530,7 @@ final class IslandController {
         routeTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(900))
             guard let self, !Task.isCancelled, self.model.banner?.kind != .device else { return }
-            self.present(.route(route), for: .seconds(2.6))
+            self.present(.route(self.bluetooth.refine(route)), for: .seconds(2.6))
         }
     }
 
@@ -853,9 +831,7 @@ final class IslandController {
     }
 
     private var cardHitRect: NSRect? {
-        let isOpen = model.cardMode == .panel || model.cardMode == .status
-        guard model.taskStyle == .capsule || model.cardMode == .status, !model.isLocked, !model.isCurtained,
-              !(model.isMenuOpen && !isOpen) else { return nil }
+        guard model.taskStyle == .capsule, !model.isLocked, !model.isCurtained, !(model.isMenuOpen && model.cardMode != .panel) else { return nil }
         let size = model.cardSize
         let frame = panel.frame
         return NSRect(x: frame.midX - size.width / 2, y: frame.maxY - model.cardTop - size.height, width: size.width, height: size.height)
@@ -993,6 +969,7 @@ final class IslandController {
         model.pageMovesForward = target > (pages.firstIndex(of: model.page) ?? 0)
         if preferences.haptics { Haptics.tick() }
         withAnimation(.spring(duration: 0.42, bounce: 0.18)) { model.page = page }
+        updateStatusWatch()
     }
 
     /// Sideways changes the track (to the left for the next one, like turning a page). Down opens
@@ -1131,6 +1108,9 @@ final class IslandController {
     }
 
     private func applyPreferences(force: Bool = false) {
+        if model.showsStatusDetail != status.prefs.islandGauges {
+            withAnimation(Self.open) { model.showsStatusDetail = status.prefs.islandGauges }
+        }
         let new = IslandPreferences.current
         let old = preferences
         guard force || new != old else { return }

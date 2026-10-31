@@ -18,6 +18,8 @@ final class StatusController {
     @ObservationIgnored private var appearanceObservation: NSKeyValueObservation?
     @ObservationIgnored private var lastIconKey: IconKey?
     @ObservationIgnored private var darkMenuBar = true
+    /// Who is showing the Mac's details right now (the island's status page, the panel).
+    @ObservationIgnored private var watchers: Set<String> = []
 
     init() {
         monitor = SystemMonitor(prefs: prefs)
@@ -37,6 +39,12 @@ final class StatusController {
             let corner = NSRect(x: screen.frame.maxX - 220, y: screen.visibleFrame.maxY, width: 1, height: 1)
             panel.isShown ? panel.close() : panel.show(anchor: corner, on: screen)
         }
+    }
+
+    /// Full sampling (processes, disk, Wi-Fi, latency) runs while anything shows it.
+    func watch(_ watcher: String, _ watching: Bool) {
+        if watching { watchers.insert(watcher) } else { watchers.remove(watcher) }
+        monitor.panelVisible = !watchers.isEmpty
     }
 
     // MARK: Alerts
@@ -138,10 +146,10 @@ final class StatusController {
                 // Sample at full rate once the unfolding has mostly finished, so it doesn't stutter.
                 Task {
                     try? await Task.sleep(for: .milliseconds(350))
-                    if self.panel?.isShown == true { self.monitor.panelVisible = true }
+                    if self.panel?.isShown == true { self.watch("panel", true) }
                 }
             } else {
-                monitor.panelVisible = false
+                watch("panel", false)
                 Task {
                     try? await Task.sleep(for: .milliseconds(200))
                     if self.panel?.isShown != true { self.prefs.page = .overview }

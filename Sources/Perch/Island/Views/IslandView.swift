@@ -7,10 +7,8 @@ struct IslandView: View {
 
     var body: some View {
         ZStack(alignment: .top) {
-            // The status card opens in every style; the capsule only lives here in capsule style.
-            if model.taskStyle == .capsule || model.cardMode == .status {
+            if model.taskStyle == .capsule {
                 TaskCard()
-                    .transition(.opacity.combined(with: .scale(scale: 0.9, anchor: .top)))
             }
             // Drawn last so it passes over the capsule: banners drop in front of it, and the open
             // island swallows it.

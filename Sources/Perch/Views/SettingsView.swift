@@ -274,7 +274,8 @@ private struct HelpPane: View {
             }
 
             Section(tr("状态", "Status")) {
-                ReferenceRow(example: tr("灵动岛状态页的读数 · 右键刘海", "The island's status page · right-click the notch"), meaning: tr("系统状态", "System status"))
+                ReferenceRow(example: tr("灵动岛的状态页 · 点读数切换详情", "The island's status page · click a gauge"), meaning: tr("系统状态与详情", "Status and details"))
+                ReferenceRow(example: tr("菜单栏读数 · Perch 菜单", "Menu bar readout · Perch menu"), meaning: tr("完整的系统状态面板", "The full status panel"))
                 ReferenceRow(example: tr("右键进程", "Right-click a process"), meaning: tr("在访达中显示、切换或退出", "Show in Finder, switch, or quit"))
             }
         }

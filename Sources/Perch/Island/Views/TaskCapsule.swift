@@ -15,15 +15,11 @@ struct TaskCard: View {
         let shape = RoundedRectangle(cornerRadius: cornerRadius(for: size), style: .continuous)
         // Today's tasks are nobody else's business on the lock screen, and a menu dropping out of
         // the menu bar shouldn't have the capsule over it.
-        let isOpen = model.cardMode == .panel || model.cardMode == .status
-        let hidden = model.isLocked || model.isCurtained || (model.isMenuOpen && !isOpen)
+        let hidden = model.isLocked || model.isCurtained || (model.isMenuOpen && model.cardMode != .panel)
         ZStack(alignment: .top) {
             if model.cardMode == .panel {
                 PanelView()
                     .frame(width: IslandModel.panelSize.width, height: IslandModel.panelSize.height)
-                    .transition(.opacity.animation(.easeOut(duration: 0.22).delay(0.06)))
-            } else if model.cardMode == .status {
-                StatusCardContent()
                     .transition(.opacity.animation(.easeOut(duration: 0.22).delay(0.06)))
             } else {
                 CapsuleContent(
@@ -54,27 +50,7 @@ struct TaskCard: View {
         case .capsule: size.height / 2
         case .peek: 20
         case .panel: 24
-        case .status: Metrics.panelRadius
         }
-    }
-}
-
-/// The Mac's status in the card: the dashboard the menu bar readout opens too, the card growing
-/// and shrinking with its pages.
-private struct StatusCardContent: View {
-    @Environment(IslandModel.self) private var model
-    @State private var presented = false
-
-    var body: some View {
-        StatusDashboard { model.settingsHandler?(.status) }
-            .fixedSize(horizontal: false, vertical: true)
-            // The cards settle in one after another, as under the menu bar.
-            .environment(\.panelPresented, presented)
-            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
-                guard abs(height - model.statusHeight) > 0.5 else { return }
-                withAnimation(Motion.page) { model.statusHeight = height }
-            }
-            .onAppear { withAnimation(Motion.open) { presented = true } }
     }
 }
 

@@ -10,13 +10,13 @@ struct StatusPane: View {
             Section {
                 Toggle(isOn: $prefs.islandGauges) {
                     SettingLabel(tr("灵动岛的系统状态页", "Status page in the island"),
-                                 tr("展开灵动岛后双指上下滑或点边上的圆点切换；点读数打开完整的系统状态",
-                                    "In the open island, swipe up or down or click the dots at its edge; click the gauges for the full status"))
+                                 tr("展开灵动岛后双指上下滑或点左边的圆点切换；点读数看它的详情",
+                                    "In the open island, swipe up or down or click the dots on its left; click a gauge for its details"))
                 }
                 .disabled(!islandEnabled)
                 Toggle(isOn: $prefs.menuBarReadout) {
                     SettingLabel(tr("在菜单栏显示读数", "Readout in the menu bar"),
-                                 tr("点它打开系统状态面板", "Click it for the status panel"))
+                                 tr("点它打开完整的系统状态面板（也可以从 Perch 菜单打开）", "Click it for the full status panel (also in Perch's menu)"))
                 }
                 if prefs.menuBarReadout {
                     readoutItem(tr("CPU", "CPU"), "cpu", $prefs.showCPU)

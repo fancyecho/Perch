@@ -146,6 +146,9 @@ final class SystemMonitor {
     private(set) var gpuHistory: [Double] = []
     private(set) var downHistory: [Double] = []
     private(set) var upHistory: [Double] = []
+    /// Memory in use (%) and CPU temperature (°C), for the island's charts.
+    private(set) var memoryHistory: [Double] = []
+    private(set) var temperatureHistory: [Double] = []
     private(set) var batteryEstimate: BatteryEstimate?
     private(set) var systemPowerHistory: [Double] = []
     /// Recent battery power for estimating charge and remaining time (timestamped, recorded with the panel closed too).
@@ -286,6 +289,8 @@ final class SystemMonitor {
             }
             Self.push(network.down, to: &downHistory)
             Self.push(network.up, to: &upHistory)
+            Self.push(memory.usedPercent, to: &memoryHistory)
+            if let celsius = temperature?.cpu { Self.push(celsius, to: &temperatureHistory) }
         }
         if !full { tickCount += 1 }
 

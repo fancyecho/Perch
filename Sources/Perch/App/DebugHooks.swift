@@ -24,6 +24,14 @@ extension AppDelegate {
             model.tab = .focus
             openTasks(focusInput: false)
         case "page": island?.showPage(parts.dropFirst().first == "status" ? .status : .main)
+        case "metric":
+            let metric: StatusMetric = switch parts.dropFirst().first {
+            case "memory": .memory
+            case "temperature": .temperature
+            case "network": .network
+            default: .cpu
+            }
+            island?.model.metricHandler?(metric)
         case "focus": focus.startSession()
         case "unlock": focus.debugUnlock()
         case "schedules": SchedulesWindowController.shared.show()

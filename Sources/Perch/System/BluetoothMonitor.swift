@@ -90,6 +90,15 @@ final class BluetoothMonitor: NSObject {
         devices = []
     }
 
+    /// An audio output that is one of these devices takes the device's own symbol: CoreAudio only
+    /// knows the name, which draws AirPods 3 as the generic AirPods.
+    func refine(_ route: AudioRoute) -> AudioRoute {
+        guard let device = devices.first(where: { $0.name.caseInsensitiveCompare(route.name) == .orderedSame }) else { return route }
+        var refined = route
+        refined.symbol = device.symbol
+        return refined
+    }
+
     /// Re-reads every battery, for when the levels are about to be on screen.
     func refreshBatteries() {
         for device in devices {

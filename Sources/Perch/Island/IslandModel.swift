@@ -49,8 +49,11 @@ enum TaskStyle: String, CaseIterable {
 /// The glass card under the island: the capsule (capsule style), and what it opens into.
 enum CardMode: Equatable {
     case capsule, peek, panel
-    /// The Mac's status; it opens in every style, not only with the capsule.
-    case status
+}
+
+/// The detail under the status page's gauges.
+enum StatusMetric: Equatable {
+    case cpu, memory, temperature, network
 }
 
 enum ReminderAction {
@@ -214,9 +217,8 @@ final class IslandModel {
     static let capsuleMinWidth: CGFloat = 196
     static let peekRowHeight: CGFloat = 34
     static let panelSize = CGSize(width: 368, height: 560)
-    static let statusWidth = StatusPanel.panelWidth
-    /// The tallest the status card may grow (its battery page); the window leaves room for it.
-    static let statusMaxHeight: CGFloat = 740
+    /// The open island on its status page: gauges and a detail strip under them.
+    static let statusDrop: CGFloat = 150
 
     var geometry: NotchGeometry
     var isExpanded = false
@@ -246,8 +248,9 @@ final class IslandModel {
     var mediaNudge: CGFloat = 0
     /// How far the capsule's task has been swiped: right completes, left moves it to tomorrow.
     var capsuleSwipe: CGFloat = 0
-    /// The status card's height, as its current page lays out.
-    var statusHeight: CGFloat = 600
+    var statusMetric = StatusMetric.cpu
+    /// The status page has its gauges and details (Settings › Status).
+    var showsStatusDetail = true
     var page = IslandPage.main
     /// The last page change went to the page below, so the new one comes up from the bottom.
     var pageMovesForward = true
@@ -258,8 +261,10 @@ final class IslandModel {
     /// Opens the full task list; true also focuses the new-task field.
     @ObservationIgnored var tasksHandler: ((Bool) -> Void)?
     @ObservationIgnored var settingsHandler: ((SettingsTab) -> Void)?
-    /// Opens the Mac's status in the card under the island.
+    /// Opens the island on its status page.
     @ObservationIgnored var statusHandler: (() -> Void)?
+    /// Shows a gauge's detail on the status page.
+    @ObservationIgnored var metricHandler: ((StatusMetric) -> Void)?
     /// Moves the open island to a page.
     @ObservationIgnored var pageHandler: ((IslandPage) -> Void)?
     /// The action on an alert banner: quit the runaway process, or look at the status.
@@ -298,7 +303,7 @@ final class IslandModel {
             return IslandLayout(body: CGSize(width: notch.width + Self.bannerWing * 2, height: notch.height), shoulder: 6, cornerRadius: 12, shadowOpacity: 0.3)
         case .expanded:
             // Tasks stay off the lock screen, so there it's only ever the player.
-            let drop = taskStyle == .merged && !isLocked ? Self.expandedDrop : Self.playerDrop
+            let drop = page == .status && showsStatusDetail ? Self.statusDrop : taskStyle == .merged && !isLocked ? Self.expandedDrop : Self.playerDrop
             return IslandLayout(body: CGSize(width: max(notch.width + Self.expandedExtraWidth, 340), height: notch.height + drop), shoulder: 12, cornerRadius: 26, shadowOpacity: 0.55)
         case .tasks:
             return IslandLayout(body: CGSize(width: Self.taskPanel.width, height: notch.height + Self.taskPanel.height), shoulder: 14, cornerRadius: 30, shadowOpacity: 0.55)
@@ -313,7 +318,7 @@ final class IslandModel {
         let lowestCardTop = layout(for: .banner(.track), hovering: false).height + Self.capsuleGap
         return CGSize(
             width: max(layouts.map(\.width).max() ?? 0, Self.panelSize.width) + Self.windowMargin * 2,
-            height: max(layouts.map(\.height).max() ?? 0, lowestCardTop + max(Self.panelSize.height, Self.statusMaxHeight)) + Self.windowMargin
+            height: max(layouts.map(\.height).max() ?? 0, lowestCardTop + Self.panelSize.height) + Self.windowMargin
         )
     }
 
@@ -341,8 +346,6 @@ final class IslandModel {
             return CGSize(width: width + 16, height: Self.capsuleHoverHeight + CGFloat(max(peekRows, 1)) * Self.peekRowHeight + 10)
         case .panel:
             return Self.panelSize
-        case .status:
-            return CGSize(width: Self.statusWidth, height: min(statusHeight, Self.statusMaxHeight))
         }
     }
 
