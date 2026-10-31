@@ -31,7 +31,7 @@ enum SettingsTab: Int, CaseIterable {
     var height: CGFloat {
         switch self {
         case .general: 440
-        case .tasks: 470
+        case .tasks: 720
         case .focus: 720
         case .status: 640
         case .island: 660
@@ -175,6 +175,67 @@ private struct TasksPane: View {
                 }
                 Toggle(tr("浮动胶囊始终置顶", "Keep the floating pill on top"), isOn: $pinned)
             }
+
+            CapsuleClockSection()
+        }
+    }
+}
+
+/// The time in the capsule, in Dayline's styles.
+private struct CapsuleClockSection: View {
+    @AppStorage(Pref.clockMode) private var mode = CapsuleClockMode.onTheMinute.rawValue
+    @AppStorage(Pref.clockShowsDate) private var showsDate = true
+    @AppStorage(Pref.clockShowsWeekday) private var showsWeekday = true
+    @AppStorage(Pref.clockUses24Hour) private var uses24Hour = true
+    @AppStorage(Pref.clockWideTracking) private var wideTracking = true
+    @AppStorage(Pref.clockEmphasizesTime) private var emphasizesTime = false
+    @AppStorage(Pref.clockRollsDigits) private var rollsDigits = true
+    @AppStorage(Pref.clockLanguage) private var language = "system"
+
+    var body: some View {
+        Section {
+            Picker(tr("显示时间", "Show the time"), selection: $mode) {
+                Text(tr("关闭", "Off")).tag(CapsuleClockMode.off.rawValue)
+                Text(tr("整分钟前后", "As the minute turns")).tag(CapsuleClockMode.onTheMinute.rawValue)
+                Text(tr("和任务轮流", "Taking turns with the task")).tag(CapsuleClockMode.alternate.rawValue)
+            }
+            if mode != CapsuleClockMode.off.rawValue {
+                LabeledContent(tr("预览", "Preview")) {
+                    TimelineView(.periodic(from: .now, by: 1)) { context in
+                        ClockLine(now: context.date)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 7)
+                            .background(Capsule().fill(Color.primary.opacity(0.07)))
+                    }
+                }
+                Toggle(tr("显示日期", "Show the date"), isOn: $showsDate)
+                Toggle(tr("显示星期", "Show the weekday"), isOn: $showsWeekday)
+                Toggle(tr("24 小时制", "24-hour clock"), isOn: $uses24Hour)
+                Toggle(isOn: $wideTracking) {
+                    SettingLabel(tr("宽字距", "Wide tracking"), tr("字距拉开，英文变成大写", "Letters spaced out, English in capitals"))
+                }
+                Toggle(isOn: $emphasizesTime) {
+                    SettingLabel(tr("突出时间", "Emphasize the time"), tr("日期星期变淡，时间加粗", "Date and weekday fade, the time is bold"))
+                }
+                Toggle(isOn: $rollsDigits) {
+                    SettingLabel(tr("数字滚动", "Rolling digits"), tr("整分钟时变化的数字向上滚动", "Changing digits roll up as the minute turns"))
+                }
+                Picker(tr("语言", "Language"), selection: $language) {
+                    Text(tr("跟随界面", "Same as Perch")).tag("system")
+                    Text("中文").tag("zh")
+                    Text("English").tag("en")
+                }
+            }
+        } header: {
+            Text(tr("胶囊里的时间", "Time in the Capsule"))
+        } footer: {
+            Text(mode == CapsuleClockMode.alternate.rawValue
+                 ? tr("任务 10 秒、时间 5 秒轮流显示。悬停、专注中、任务逾期或 15 分钟内到期时只显示任务；没有任务时一直显示时间。",
+                      "Ten seconds of the task, five of the time. Only the task while hovered, focusing, or when it's late or due within 15 minutes; only the time when there's nothing to do.")
+                 : tr("每分钟最后几秒，时间翻上来，看着分钟数字滚过去再换回任务。悬停、专注中、任务逾期或 15 分钟内到期时只显示任务；没有任务时一直显示时间。",
+                      "In the last seconds of each minute the time rolls in, its minute turns over, then the task comes back. Only the task while hovered, focusing, or when it's late or due within 15 minutes; only the time when there's nothing to do."))
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
     }
 }

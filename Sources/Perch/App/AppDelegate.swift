@@ -22,6 +22,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         BackgroundAgent.settleInstances()
         Pref.register()
         FocusImport.runOnce()
+        DaylineImport.runOnce()
 
         let controller = PanelController(store: store, model: model, swipe: swipe, settings: settings, focus: focus)
         self.controller = controller

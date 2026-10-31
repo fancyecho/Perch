@@ -26,6 +26,16 @@ enum Pref {
     static let hudShowsValue = "hudShowsValue"
     /// Seconds a volume or brightness HUD stays after the last change.
     static let hudDuration = "hudDuration"
+    /// The time in the capsule, taking turns with the task (see CapsuleClockMode), in Dayline's styles.
+    static let clockMode = "clock.mode"
+    static let clockShowsDate = "clock.showsDate"
+    static let clockShowsWeekday = "clock.showsWeekday"
+    static let clockUses24Hour = "clock.uses24Hour"
+    static let clockWideTracking = "clock.wideTracking"
+    static let clockEmphasizesTime = "clock.emphasizesTime"
+    static let clockRollsDigits = "clock.rollsDigits"
+    /// "system", "zh" or "en": the time can read in English while the rest is Chinese.
+    static let clockLanguage = "clock.language"
 
     static func register() {
         UserDefaults.standard.register(defaults: [
@@ -49,6 +59,14 @@ enum Pref {
             hudColorful: true,
             hudShowsValue: false,
             hudDuration: 1.6,
+            clockMode: CapsuleClockMode.onTheMinute.rawValue,
+            clockShowsDate: true,
+            clockShowsWeekday: true,
+            clockUses24Hour: true,
+            clockWideTracking: true,
+            clockEmphasizesTime: false,
+            clockRollsDigits: true,
+            clockLanguage: "system",
         ])
     }
 }

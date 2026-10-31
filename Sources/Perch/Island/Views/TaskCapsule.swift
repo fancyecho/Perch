@@ -60,16 +60,24 @@ private struct CapsuleContent: View {
     let hovering: Bool
     let peeking: Bool
     let onPress: (Bool) -> Void
+    @AppStorage(Pref.clockMode) private var clockMode = CapsuleClockMode.onTheMinute.rawValue
 
     var body: some View {
-        TimelineView(.everyMinute) { context in
-            VStack(spacing: 0) {
-                CapsuleRow(now: context.date, hovering: hovering, onPress: onPress)
-                    .frame(height: hovering ? IslandModel.capsuleHoverHeight : IslandModel.capsuleHeight)
-                if peeking {
-                    CapsulePeek(now: context.date)
-                        .transition(.opacity)
-                }
+        // The time taking turns with the task needs the seconds; otherwise minutes will do.
+        if clockMode == CapsuleClockMode.off.rawValue {
+            TimelineView(.everyMinute) { context in content(context.date) }
+        } else {
+            TimelineView(.periodic(from: .now, by: 1)) { context in content(context.date) }
+        }
+    }
+
+    private func content(_ now: Date) -> some View {
+        VStack(spacing: 0) {
+            CapsuleRow(now: now, hovering: hovering, onPress: onPress)
+                .frame(height: hovering ? IslandModel.capsuleHoverHeight : IslandModel.capsuleHeight)
+            if peeking {
+                CapsulePeek(now: now)
+                    .transition(.opacity)
             }
         }
     }
@@ -84,17 +92,42 @@ private struct CapsuleRow: View {
     @Environment(IslandModel.self) private var model
     @Environment(AppSettings.self) private var settings
     @Environment(ScheduleStore.self) private var schedules
+    @AppStorage(Pref.clockMode) private var clockMode = CapsuleClockMode.onTheMinute.rawValue
 
     var body: some View {
         Button { model.tasksHandler?(false) } label: {
             ZStack {
                 swipeReveal
-                content.offset(x: model.capsuleSwipe)
+                let showsClock = showsClock
+                ZStack {
+                    if showsClock {
+                        ClockLine(now: now)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .transition(.capsuleRoll)
+                    } else {
+                        content
+                            .transition(.capsuleRoll)
+                    }
+                }
+                .animation(.smooth(duration: 0.55), value: showsClock)
+                .offset(x: model.capsuleSwipe)
             }
         }
         .buttonStyle(PressReportingStyle(onPress: onPress))
         .contextMenu { CapsuleMenu(now: now) }
         .help(settings.hotKey.map { tr("全部任务（\($0.displayString)）", "All tasks (\($0.displayString))") } ?? tr("全部任务", "All tasks"))
+    }
+
+    /// Dayline's time takes the capsule now and then (see CapsuleClockMode), and for good when
+    /// there's nothing left to do. Never while it's being looked at or swiped, while a task is being
+    /// focused on, or when the task is late or due within a quarter of an hour.
+    private var showsClock: Bool {
+        let mode = CapsuleClockMode(rawValue: clockMode) ?? .onTheMinute
+        guard mode != .off, !hovering, model.capsuleSwipe == 0 else { return false }
+        guard let headline = store.headline(now: now) else { return true }
+        if store.focus?.taskID == headline.id || DateText.isOverdue(headline, now: now) { return false }
+        if let time = headline.schedule?.time, time > now, time.timeIntervalSince(now) < 15 * 60 { return false }
+        return mode.showsClock(at: now)
     }
 
     private var content: some View {
@@ -271,5 +304,27 @@ private struct CapsuleMenu: View {
         FocusMenuItems()
         Divider()
         Button(tr("待办设置…", "Task Settings…")) { model.settingsHandler?(.tasks) }
+    }
+}
+
+/// The task and the time trade places in the capsule by rolling upward, like a split-flap.
+private struct CapsuleRoll: ViewModifier {
+    let offset: CGFloat
+    let active: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .offset(y: offset)
+            .blur(radius: active ? 4 : 0)
+            .opacity(active ? 0 : 1)
+    }
+}
+
+extension AnyTransition {
+    static var capsuleRoll: AnyTransition {
+        .asymmetric(
+            insertion: .modifier(active: CapsuleRoll(offset: 12, active: true), identity: CapsuleRoll(offset: 0, active: false)),
+            removal: .modifier(active: CapsuleRoll(offset: -12, active: true), identity: CapsuleRoll(offset: 0, active: false))
+        )
     }
 }

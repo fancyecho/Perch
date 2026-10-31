@@ -33,9 +33,9 @@ struct ExpandedIslandView: View {
                     } else {
                         pageContent(page, now: now, hasMedia: hasMedia, showsTasks: showsTasks)
                             .id(page)
-                            // The pages stack like the dots: the status page sits below, so it comes up
-                            // from the bottom, and going back the player comes down from the top.
-                            .transition(.push(from: model.pageMovesForward ? .bottom : .top))
+                            // The pages stack like the dots: the status page sits below, so it rises
+                            // into place, and going back the player settles down from above.
+                            .transition(.islandPage(forward: model.pageMovesForward))
                     }
                 }
                 .padding(.horizontal, 18)
@@ -112,6 +112,19 @@ private struct TopWings: View {
 
     var body: some View {
         WingsLayout {
+            leading
+                .id(showsStatus)
+                .transition(.opacity.animation(.easeInOut(duration: 0.25)))
+        } trailing: {
+            trailing
+        }
+        .font(.system(size: 11, weight: .medium))
+        .foregroundStyle(.white.opacity(0.6))
+    }
+
+    @ViewBuilder
+    private var leading: some View {
+        Group {
             if hasMedia, let icon = media.sourceIcon {
                 HStack(spacing: 5) {
                     Image(nsImage: icon)
@@ -133,19 +146,19 @@ private struct TopWings: View {
                         .lineLimit(1)
                 }
             }
-        } trailing: {
-            let today = DateText.today(now)
-            HStack(alignment: .firstTextBaseline, spacing: 4) {
-                Text(DateText.weekday(today))
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(Color(red: 1, green: 0.36, blue: 0.32))
-                Text("\(today.day)")
-                    .font(.system(size: 19, weight: .semibold, design: .rounded).monospacedDigit())
-            }
-            .fixedSize()
         }
-        .font(.system(size: 11, weight: .medium))
-        .foregroundStyle(.white.opacity(0.6))
+    }
+
+    private var trailing: some View {
+        let today = DateText.today(now)
+        return HStack(alignment: .firstTextBaseline, spacing: 4) {
+            Text(DateText.weekday(today))
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Color(red: 1, green: 0.36, blue: 0.32))
+            Text("\(today.day)")
+                .font(.system(size: 19, weight: .semibold, design: .rounded).monospacedDigit())
+        }
+        .fixedSize()
     }
 }
 
@@ -315,35 +328,16 @@ private struct TimedProgress: View {
     }
 }
 
-/// The island's status page: the battery, headphones and where sound goes, then the Mac's vital
-/// signs as four gauges, and under them the chosen one in a little more depth.
+/// The island's status page: a quiet line of the battery, headphones and where sound goes, then
+/// the Mac's vital signs as four gauges, and under them the chosen one over the last two minutes.
 private struct StatusGlance: View {
-    @Environment(SystemVolume.self) private var volume
-    @Environment(BluetoothMonitor.self) private var bluetooth
-    @Environment(PowerMonitor.self) private var power
     @Environment(StatusPreferences.self) private var statusPrefs
     /// Whether to say nothing is playing, when there are no gauges to show instead.
     var showsHint = true
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 6) {
-                if let battery = power.battery {
-                    StatusChip(text: "\(battery.level)%") {
-                        BatteryGlyph(level: battery.level, isCharging: battery.isPluggedIn && battery.isCharging, tint: battery.tint)
-                            .frame(width: 20, height: 9)
-                    }
-                }
-                ForEach(bluetooth.devices.prefix(2)) { device in
-                    StatusChip(text: device.battery.main.map { "\($0)%" } ?? device.name) { Image(systemName: device.symbol) }
-                        .help(device.name)
-                }
-                // The output is often one of those devices already; then it isn't listed twice.
-                if !volume.route.name.isEmpty,
-                   !bluetooth.devices.prefix(2).contains(where: { $0.name.caseInsensitiveCompare(volume.route.name) == .orderedSame }) {
-                    StatusChip(text: volume.route.name) { Image(systemName: bluetooth.refine(volume.route).symbol) }
-                }
-            }
+        VStack(alignment: .leading, spacing: 9) {
+            StatusHeader()
             if statusPrefs.islandGauges || !showsHint {
                 SystemGauges()
                 StatusDetail()
@@ -362,11 +356,48 @@ private struct StatusGlance: View {
     }
 }
 
+/// The battery, the headphones and where the sound goes, as one quiet line.
+private struct StatusHeader: View {
+    @Environment(SystemVolume.self) private var volume
+    @Environment(BluetoothMonitor.self) private var bluetooth
+    @Environment(PowerMonitor.self) private var power
+
+    var body: some View {
+        HStack(spacing: 14) {
+            if let battery = power.battery {
+                HStack(spacing: 5) {
+                    BatteryGlyph(level: battery.level, isCharging: battery.isPluggedIn && battery.isCharging, tint: battery.tint)
+                        .frame(width: 19, height: 8.5)
+                    Text("\(battery.level)%")
+                }
+            }
+            ForEach(bluetooth.devices.prefix(2)) { device in
+                HStack(spacing: 4) {
+                    Image(systemName: device.symbol)
+                    Text(device.battery.main.map { "\($0)%" } ?? device.name)
+                }
+                .help(device.name)
+            }
+            // The output is often one of those devices already; then it isn't listed twice.
+            if !volume.route.name.isEmpty,
+               !bluetooth.devices.prefix(2).contains(where: { $0.name.caseInsensitiveCompare(volume.route.name) == .orderedSame }) {
+                HStack(spacing: 4) {
+                    Image(systemName: bluetooth.refine(volume.route).symbol)
+                    Text(volume.route.name)
+                }
+            }
+        }
+        .font(.system(size: 11, weight: .medium).monospacedDigit())
+        .foregroundStyle(.white.opacity(0.62))
+        .lineLimit(1)
+        .padding(.horizontal, 6)
+    }
+}
+
 /// CPU, memory, temperature and network as small rings; each one picks the detail shown below.
 private struct SystemGauges: View {
     @Environment(SystemMonitor.self) private var monitor
     @Environment(IslandModel.self) private var model
-    @Namespace private var selection
 
     var body: some View {
         HStack(spacing: 4) {
@@ -389,9 +420,9 @@ private struct SystemGauges: View {
                 NetworkGauge(down: monitor.network.down, up: monitor.network.up)
             }
         }
-        .animation(.snappy(duration: 0.3), value: model.statusMetric)
     }
 
+    /// The chosen gauge sits on a faint plate; the others step back a little.
     private func tile<Content: View>(_ metric: StatusMetric, @ViewBuilder content: () -> Content) -> some View {
         let selected = model.statusMetric == metric
         return Button { model.metricHandler?(metric) } label: {
@@ -399,17 +430,12 @@ private struct SystemGauges: View {
                 .padding(.horizontal, 6)
                 .padding(.vertical, 4)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background {
-                    if selected {
-                        RoundedRectangle(cornerRadius: 11, style: .continuous)
-                            .fill(Color.white.opacity(0.1))
-                            .matchedGeometryEffect(id: "selection", in: selection)
-                    }
-                }
+                .background(RoundedRectangle(cornerRadius: 11, style: .continuous).fill(Color.white.opacity(selected ? 0.09 : 0)))
                 .contentShape(.rect(cornerRadius: 11))
         }
         .buttonStyle(.plain)
-        .opacity(selected ? 1 : 0.72)
+        .opacity(selected ? 1 : 0.7)
+        .animation(.smooth(duration: 0.25), value: selected)
         .accessibilityAddTraits(selected ? .isSelected : [])
     }
 
@@ -419,36 +445,31 @@ private struct SystemGauges: View {
     }
 }
 
-/// The chosen gauge in more depth: the last two minutes as a chart, a couple of facts, and what's
-/// using it most (right-click to quit it).
+/// The chosen gauge over the last two minutes: a wide chart, and above it what reading it needs,
+/// the average and the peak of what's drawn, or the totals the ring can't say.
 private struct StatusDetail: View {
     @Environment(SystemMonitor.self) private var monitor
     @Environment(IslandModel.self) private var model
 
     var body: some View {
-        HStack(alignment: .center, spacing: 14) {
-            // The last two minutes fill in from the right; the backing keeps the strip's shape meanwhile.
-            chart
-                .padding(.horizontal, 6)
-                .padding(.vertical, 5)
-                .frame(width: 122, height: 44)
-                .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(Color.white.opacity(0.05)))
-            VStack(alignment: .leading, spacing: 3) {
+        let facts = facts
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .firstTextBaseline) {
                 Text(facts.0)
-                    .font(.system(size: 11.5, weight: .semibold).monospacedDigit())
-                    .foregroundStyle(.white.opacity(0.9))
+                    .font(.system(size: 11, weight: .semibold).monospacedDigit())
+                    .foregroundStyle(.white.opacity(0.85))
+                Spacer(minLength: 8)
                 Text(facts.1)
-                    .font(.system(size: 10.5).monospacedDigit())
-                    .foregroundStyle(.white.opacity(0.5))
-                footer
+                    .font(.system(size: 10.5, weight: .medium).monospacedDigit())
+                    .foregroundStyle(facts.2 ?? .white.opacity(0.45))
             }
             .lineLimit(1)
-            .contentTransition(.numericText())
-            Spacer(minLength: 0)
+            chart
+                .frame(height: 28)
         }
         .padding(.horizontal, 6)
         .id(model.statusMetric)
-        .transition(.opacity.combined(with: .offset(y: 4)))
+        .transition(.opacity.animation(.smooth(duration: 0.25)))
     }
 
     @ViewBuilder
@@ -459,99 +480,54 @@ private struct StatusDetail: View {
         case .memory:
             Sparkline(values: monitor.memoryHistory, maxValue: 100, tint: monitor.memory.pressureLevel > 1 ? .orange : Palette.memory)
         case .temperature:
-            Sparkline(values: monitor.temperatureHistory, maxValue: 100,
-                      tint: Self.temperatureTint(monitor.temperature?.cpu ?? 40))
+            Sparkline(values: monitor.temperatureHistory, maxValue: 100, tint: Self.temperatureTint(monitor.temperature?.cpu ?? 40))
         case .network:
             MirrorChart(top: monitor.downHistory, bottom: monitor.upHistory, topTint: Palette.down, bottomTint: Palette.up)
         }
     }
 
-    private var facts: (String, String) {
+    /// The headline, the quieter note on the right, and that note's color when it's a warning.
+    private var facts: (String, String, Color?) {
         switch model.statusMetric {
         case .cpu:
-            let load = monitor.loadAverage.first.map { String(format: "%.2f", $0) } ?? "–"
-            return (tr("用户 \(Fmt.percent(monitor.cpu.user))% · 系统 \(Fmt.percent(monitor.cpu.system))%", "User \(Fmt.percent(monitor.cpu.user))% · System \(Fmt.percent(monitor.cpu.system))%"),
-                    tr("\(monitor.cpu.cores.count) 核 · 负载 \(load)", "\(monitor.cpu.cores.count) cores · load \(load)"))
+            let history = monitor.cpuHistory
+            let average = history.isEmpty ? monitor.cpu.usage : history.reduce(0, +) / Double(history.count)
+            return (tr("平均 \(Fmt.percent(average))% · 峰值 \(Fmt.percent(history.max() ?? monitor.cpu.usage))%",
+                       "Average \(Fmt.percent(average))% · peak \(Fmt.percent(history.max() ?? monitor.cpu.usage))%"),
+                    tr("用户 \(Fmt.percent(monitor.cpu.user))% · 系统 \(Fmt.percent(monitor.cpu.system))%",
+                       "user \(Fmt.percent(monitor.cpu.user))% · system \(Fmt.percent(monitor.cpu.system))%"), nil)
         case .memory:
             let m = monitor.memory
-            let pressure = switch m.pressureLevel {
-            case 4: tr("压力严重", "Critical pressure")
-            case 2: tr("压力偏高", "Pressure rising")
-            default: tr("压力正常", "Pressure normal")
+            let swap = m.swapUsed > 512 * 1_048_576 ? tr(" · 交换 \(Fmt.memory(m.swapUsed))", " · swap \(Fmt.memory(m.swapUsed))") : ""
+            let note: (String, Color?) = switch m.pressureLevel {
+            case 4: (tr("内存压力严重", "Critical pressure") + swap, .red)
+            case 2: (tr("内存压力偏高", "Pressure rising") + swap, .orange)
+            default: (tr("内存压力正常", "Pressure normal") + swap, nil)
             }
-            return ("\(Fmt.memory(m.used)) / \(Fmt.memory(m.total))", "\(pressure) · " + tr("交换 \(Fmt.memory(m.swapUsed))", "swap \(Fmt.memory(m.swapUsed))"))
+            return (tr("已用 \(Fmt.memory(m.used)) / \(Fmt.memory(m.total))", "\(Fmt.memory(m.used)) of \(Fmt.memory(m.total)) used"), note.0, note.1)
         case .temperature:
             guard let t = monitor.temperature, let cpu = t.cpu else {
-                return (tr("读不到温度", "No temperature"), tr("这台 Mac 没有可读的传感器", "No readable sensors on this Mac"))
+                return (tr("读不到温度", "No temperature"), "", nil)
             }
-            let hottest = t.cpuMax.map { tr(" · 最热 \(Int($0.rounded()))°", " · hottest \(Int($0.rounded()))°") } ?? ""
-            let gpu = t.gpu.map { "GPU \(Int($0.rounded()))°" } ?? tr("\(t.cpuSensorCount) 个传感器", "\(t.cpuSensorCount) sensors")
-            return (tr("CPU 平均 \(Int(cpu.rounded()))°", "CPU \(Int(cpu.rounded()))° average") + hottest, gpu)
+            let peak = max(monitor.temperatureHistory.max() ?? cpu, t.cpuMax ?? cpu)
+            return (tr("平均 \(Int(cpu.rounded()))° · 最热 \(Int(peak.rounded()))°", "Average \(Int(cpu.rounded()))° · hottest \(Int(peak.rounded()))°"),
+                    t.gpu.map { "GPU \(Int($0.rounded()))°" } ?? "", cpu >= 90 ? .red : nil)
         case .network:
-            let n = monitor.network
+            let down = monitor.downHistory.max() ?? monitor.network.down
+            let up = monitor.upHistory.max() ?? monitor.network.up
             let link: String
             if let wifi = monitor.wifi {
                 let rate = wifi.rate >= 1000 ? String(format: "%.1f Gbps", wifi.rate / 1000) : String(format: "%.0f Mbps", wifi.rate)
-                link = "Wi-Fi \(rate)"
+                link = "Wi-Fi \(rate)" + (monitor.latency?.internet.map { " · \(Int($0.rounded())) ms" } ?? "")
             } else {
-                link = tr("有线或未连接 Wi-Fi", "Wired or no Wi-Fi")
+                link = tr("有线网络", "Wired")
             }
-            let latency = monitor.latency?.internet.map { tr(" · 延迟 \(Int($0.rounded())) ms", " · \(Int($0.rounded())) ms") } ?? ""
-            return ("↓ \(Fmt.rate(n.down))   ↑ \(Fmt.rate(n.up))", link + latency)
-        }
-    }
-
-    @ViewBuilder
-    private var footer: some View {
-        switch model.statusMetric {
-        case .cpu:
-            if let top = monitor.topByCPU.first { ProcessLine(process: top, value: String(format: "%.0f%%", top.cpu)) }
-        case .memory:
-            if let top = monitor.topByMemory.first { ProcessLine(process: top, value: Fmt.memory(top.memory)) }
-        case .temperature:
-            if let top = monitor.topByCPU.first { ProcessLine(process: top, value: String(format: "%.0f%%", top.cpu)) }
-        case .network:
-            Text(monitor.network.address ?? tr("未连接", "Not connected"))
-                .font(.system(size: 10.5).monospacedDigit())
-                .foregroundStyle(.white.opacity(0.5))
+            return (tr("峰值 ↓ \(Fmt.rate(down))  ↑ \(Fmt.rate(up))", "Peak ↓ \(Fmt.rate(down))  ↑ \(Fmt.rate(up))"), link, nil)
         }
     }
 
     static func temperatureTint(_ celsius: Double) -> Color {
         celsius >= 90 ? .red : celsius >= 75 ? .orange : .mint
-    }
-}
-
-/// The busiest process: its icon, name and share; right-click to switch to it or quit it.
-private struct ProcessLine: View {
-    let process: ProcessEntry
-    let value: String
-
-    var body: some View {
-        let app = NSRunningApplication(processIdentifier: process.id)
-        HStack(spacing: 5) {
-            Image(nsImage: process.icon)
-                .resizable()
-                .frame(width: 12, height: 12)
-            Text(process.name)
-                .truncationMode(.middle)
-            Text(value)
-                .monospacedDigit()
-                .foregroundStyle(.white.opacity(0.5))
-        }
-        .font(.system(size: 10.5, weight: .medium))
-        .foregroundStyle(.white.opacity(0.75))
-        .contentShape(.rect)
-        .help(tr("占用最多 · 右键可切换或退出", "Using the most · right-click to switch or quit"))
-        .contextMenu {
-            if let app, app.activationPolicy == .regular, app.processIdentifier != ProcessInfo.processInfo.processIdentifier {
-                Button(tr("切换到 \(process.name)", "Switch to \(process.name)")) { app.activate() }
-                Button(tr("退出 \(process.name)", "Quit \(process.name)")) { app.terminate() }
-            }
-            if let url = app?.bundleURL {
-                Button(tr("在访达中显示", "Show in Finder")) { NSWorkspace.shared.activateFileViewerSelecting([url]) }
-            }
-        }
     }
 }
 
@@ -768,5 +744,33 @@ private struct IslandLinkButton: View {
         .buttonStyle(PressScaleStyle())
         .onHover { hovering = $0 }
         .animation(.easeOut(duration: 0.15), value: hovering)
+    }
+}
+
+/// A page of the open island arriving or leaving: a short rise or fall with a soft blur, the same
+/// distance however tall the island grows meanwhile.
+private struct PageSlide: ViewModifier {
+    let offset: CGFloat
+    let blur: CGFloat
+    let opacity: Double
+
+    func body(content: Content) -> some View {
+        content
+            .offset(y: offset)
+            .blur(radius: blur)
+            .opacity(opacity)
+    }
+}
+
+extension AnyTransition {
+    static func islandPage(forward: Bool) -> AnyTransition {
+        .asymmetric(
+            insertion: .modifier(active: PageSlide(offset: forward ? 22 : -22, blur: 6, opacity: 0),
+                                 identity: PageSlide(offset: 0, blur: 0, opacity: 1))
+                .animation(.smooth(duration: 0.42).delay(0.06)),
+            removal: .modifier(active: PageSlide(offset: forward ? -14 : 14, blur: 5, opacity: 0),
+                               identity: PageSlide(offset: 0, blur: 0, opacity: 1))
+                .animation(.easeIn(duration: 0.16))
+        )
     }
 }

@@ -966,10 +966,14 @@ final class IslandController {
     func showPage(_ page: IslandPage) {
         let pages = islandPages
         guard page != model.page, let target = pages.firstIndex(of: page) else { return }
+        // The direction lands first, so the page leaving already carries it.
         model.pageMovesForward = target > (pages.firstIndex(of: model.page) ?? 0)
         if preferences.haptics { Haptics.tick() }
-        withAnimation(.spring(duration: 0.42, bounce: 0.18)) { model.page = page }
-        updateStatusWatch()
+        Task { [weak self] in
+            guard let self else { return }
+            withAnimation(.spring(duration: 0.45, bounce: 0.12)) { self.model.page = page }
+            self.updateStatusWatch()
+        }
     }
 
     /// Sideways changes the track (to the left for the next one, like turning a page). Down opens

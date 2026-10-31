@@ -218,7 +218,7 @@ final class IslandModel {
     static let peekRowHeight: CGFloat = 34
     static let panelSize = CGSize(width: 368, height: 560)
     /// The open island on its status page: gauges and a detail strip under them.
-    static let statusDrop: CGFloat = 150
+    static let statusDrop: CGFloat = 134
 
     var geometry: NotchGeometry
     var isExpanded = false

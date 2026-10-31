@@ -167,3 +167,32 @@ struct AppleAudioModelTests {
         #expect(AppleAudioModel.caseSymbol(for: "airpods") == "airpods.chargingcase")
     }
 }
+
+struct CapsuleClockTests {
+    private let taipei = TimeZone(identifier: "Asia/Taipei")!
+    private var saturday: Date {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = taipei
+        return calendar.date(from: DateComponents(year: 2026, month: 10, day: 31, hour: 8, minute: 39))!
+    }
+
+    @Test func readsLikeDayline() {
+        let english = ClockLineStyle(english: true).parts(at: saturday, in: taipei)
+        #expect(english.leading == "SAT OCT 31")
+        #expect(english.time == "08:39")
+        let chinese = ClockLineStyle(wideTracking: false).parts(at: saturday, in: taipei)
+        #expect(chinese.leading == "10月31日 周六")
+        let bare = ClockLineStyle(showsDate: false, showsWeekday: false, uses24Hour: false, english: true).parts(at: saturday, in: taipei)
+        #expect(bare.leading == nil)
+        #expect(bare.time == "8:39 AM")
+    }
+
+    @Test func theTimeComesAsTheMinuteTurns() {
+        let calendar = Calendar.current
+        let base = calendar.date(bySettingHour: 10, minute: 0, second: 0, of: .now)!
+        #expect(CapsuleClockMode.onTheMinute.showsClock(at: base.addingTimeInterval(-2)))
+        #expect(CapsuleClockMode.onTheMinute.showsClock(at: base.addingTimeInterval(3)))
+        #expect(!CapsuleClockMode.onTheMinute.showsClock(at: base.addingTimeInterval(20)))
+        #expect(!CapsuleClockMode.off.showsClock(at: base))
+    }
+}
