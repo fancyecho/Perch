@@ -19,6 +19,7 @@ extension AppDelegate {
         case "collapse": island?.collapse()
         case "status": island?.openStatus()
         case "close": island?.closeTaskList()
+        case "panel": status.showPanel()
         case "tasks": openTasks(focusInput: false)
         case "focustab":
             island?.taskPanel.tab = .focus

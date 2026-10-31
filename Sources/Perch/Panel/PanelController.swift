@@ -41,7 +41,7 @@ final class PanelController: NSObject, NSWindowDelegate {
             .environment(focus)
         let hosting = NSHostingView(rootView: root)
         hosting.sizingOptions = []
-        panel.contentView = hosting
+        panel.contentView = NSView.container(for: hosting)
         panel.delegate = self
         panel.onCancel = { [weak self] in self?.go(.pill) }
 

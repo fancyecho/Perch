@@ -7,9 +7,9 @@ import ServiceManagement
 /// Only one Perch may run at a time (or two sets of everything would appear):
 /// - with the agent on, the instance launchd started is the one, and closes any others;
 /// - an instance started otherwise (from Finder, after an update) asks the agent to restart and
-///   take over, then quits.
+///   take over, and carries on meanwhile; the agent's instance closes it once it's up.
 enum BackgroundAgent {
-    static let label = "app.perch.Perch.agent"
+    nonisolated static let label = "app.perch.Perch.agent"
     /// For tests and hand-overs: don't hand off on this launch.
     static let skipHandOffArgument = "--skip-handoff"
 
@@ -44,15 +44,44 @@ enum BackgroundAgent {
         }
     }
 
-    /// The agent is on but this launch came from Finder or an update: have the agent restart (so the
-    /// new build is the one running) and quit, but only once the other instance is really up.
+    /// The agent is on but this launch came from Finder or an update: have the agent restart, so the
+    /// new build is the one running. Nothing waits for it: this instance starts up as usual and the
+    /// agent's closes it once it's up, and if the agent can't start, this one simply stays. (It used
+    /// to wait on the main thread for the hand-over, which froze every launch for seconds whenever
+    /// the agent couldn't start.)
     private static func handOffIfNeeded() {
         guard isEnabled, !CommandLine.arguments.contains(skipHandOffArgument) else { return }
-        launchctl(["kickstart", "-k", "gui/\(getuid())/\(label)"])
-        let deadline = Date.now.addingTimeInterval(4)
-        while Date.now < deadline {
-            if !otherInstances.isEmpty { exit(0) }
-            Thread.sleep(forTimeInterval: 0.2)
+        let stale = UserDefaults.standard.string(forKey: registeredBuildKey) != buildFingerprint
+        Task.detached(priority: .utility) {
+            if stale {
+                // launchd checks the agent against the app it was registered from; after an update
+                // (a new signature) it refuses to start it until it's registered again. Registering
+                // starts it, so there's nothing to kick.
+                await reregister()
+            } else {
+                launchctl(["kickstart", "-k", "gui/\(getuid())/\(label)"])
+            }
+        }
+    }
+
+    private static let registeredBuildKey = "focus.agentRegisteredBuild"
+
+    /// Changes with every build, signed differently or not.
+    nonisolated private static var buildFingerprint: String {
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? ""
+        let modified = Bundle.main.executableURL
+            .flatMap { try? $0.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate }
+        return "\(version)-\(Int(modified?.timeIntervalSince1970 ?? 0))"
+    }
+
+    nonisolated private static func reregister() async {
+        let service = SMAppService.agent(plistName: "\(label).plist")
+        try? await service.unregister()
+        do {
+            try service.register()
+            await MainActor.run { UserDefaults.standard.set(buildFingerprint, forKey: registeredBuildKey) }
+        } catch {
+            NSLog("Perch: re-registering the keep-alive agent failed: \(error)")
         }
     }
 
@@ -74,6 +103,7 @@ enum BackgroundAgent {
     /// Perch at login, so the plain login item goes, or Perch would start twice.
     static func enable() throws {
         try service.register()
+        UserDefaults.standard.set(buildFingerprint, forKey: registeredBuildKey)
         if SMAppService.mainApp.status == .enabled { try? SMAppService.mainApp.unregister() }
     }
 
@@ -100,7 +130,7 @@ enum BackgroundAgent {
     }
 
     @discardableResult
-    private static func launchctl(_ arguments: [String]) -> Int32 {
+    nonisolated private static func launchctl(_ arguments: [String]) -> Int32 {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
         process.arguments = arguments

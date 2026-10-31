@@ -138,7 +138,7 @@ final class IslandController {
         // The window sits right over the camera housing, so its safe area flips around as it gains
         // and loses the keyboard; following it sent SwiftUI into an endless layout loop.
         hosting.safeAreaRegions = []
-        panel.contentView = hosting
+        panel.contentView = NSView.container(for: hosting)
         panel.onCancel = { [weak self] in self?.closeTaskList() }
         swipe.track(panel)
 

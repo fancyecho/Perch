@@ -90,7 +90,7 @@ final class StatusPanel: NSPanel {
                                                           onSize: { [weak self] in self?.panelSize = $0 }) { rootView })
         // The window's size is ours to decide; the SwiftUI content doesn't stretch it.
         hosting.sizingOptions = []
-        contentView = hosting
+        contentView = NSView.container(for: hosting)
     }
 
     override var canBecomeKey: Bool { true }
@@ -199,6 +199,20 @@ final class StatusPanel: NSPanel {
         image.capInsets = NSEdgeInsets(top: inset, left: inset, bottom: inset, right: inset)
         image.resizingMode = .stretch
         return image
+    }
+}
+
+extension NSView {
+    /// A plain view holding `hosting` edge to edge. As a window's content view, a hosting view
+    /// still sizes the window to its SwiftUI content, animating along with it whatever its sizing
+    /// options say; each step lays the window out again, and an unfolding panel could set off more
+    /// layout passes than AppKit allows, which ends the app. One level down it just fills the window.
+    static func container(for hosting: NSView) -> NSView {
+        let container = NSView()
+        hosting.frame = container.bounds
+        hosting.autoresizingMask = [.width, .height]
+        container.addSubview(hosting)
+        return container
     }
 }
 
