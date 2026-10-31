@@ -95,7 +95,7 @@ private struct GeneralPane: View {
                 LabeledContent(tr("唤出 / 收起任务", "Show / hide tasks")) {
                     HotKeyRecorder()
                 }
-                LabeledContent(tr("显示 / 关闭灵动岛", "Show / hide the island")) {
+                LabeledContent(tr("展开 / 收起灵动岛", "Open / close the island")) {
                     HotKeyRecorder(slot: .island)
                 }
             }
@@ -187,13 +187,13 @@ private struct TasksPane: View {
 /// The time in the capsule, in Dayline's styles.
 private struct CapsuleClockSection: View {
     private var clockFooter: String {
-        let exceptions = tr("悬停、专注中、任务逾期或 15 分钟内到期时显示任务；没有任务时一直显示时间。",
-                            "The task shows while hovered, while focusing, or when it's late or due within 15 minutes; with nothing to do it's always the time.")
+        let exceptions = tr("悬停或专注中显示任务；没有任务时一直显示时间。",
+                            "The task shows while hovered or focusing; with nothing to do it's always the time.")
         switch CapsuleClockMode(rawValue: mode) ?? .onTheMinute {
         case .off: return tr("胶囊只显示任务。", "The capsule shows only the task.")
         case .onTheMinute: return tr("每分钟最后几秒，时间翻上来，看着分钟数字滚过去再换回任务。", "In the last seconds of each minute the time rolls in, its minute turns over, then the task comes back. ") + exceptions
         case .alternate: return tr("任务 10 秒、时间 5 秒轮流显示。", "Ten seconds of the task, five of the time. ") + exceptions
-        case .always: return tr("胶囊平时是一枚时钟，指上去就翻出任务。", "The capsule is a clock; point at it and the task rolls in. ") + exceptions
+        case .always: return tr("胶囊平时是一枚时钟，指上去就翻出任务；任务逾期或 15 分钟内到期时和时间轮流显示。", "The capsule is a clock; point at it and the task rolls in. A late task, or one due within 15 minutes, takes turns with the time. ") + exceptions
         }
     }
 
@@ -254,9 +254,6 @@ private struct CapsuleClockSection: View {
 // MARK: - Notch island
 
 private struct IslandPane: View {
-    @Environment(AppSettings.self) private var settings
-    private var islandShortcut: String? { settings.islandHotKey?.displayString }
-
     @AppStorage(Pref.islandEnabled) private var enabled = true
     @AppStorage(Pref.islandHoverToExpand) private var hoverToExpand = true
     @AppStorage(Pref.islandNowPlaying) private var nowPlaying = true
@@ -273,11 +270,7 @@ private struct IslandPane: View {
     var body: some View {
         Form {
             Section {
-                Toggle(isOn: $enabled) {
-                    SettingLabel(tr("在刘海处显示灵动岛", "Show the island at the notch"),
-                                 islandShortcut.map { tr("快捷键 \($0)，可在「通用」里修改", "Shortcut \($0); change it in General") }
-                                    ?? tr("可以在「通用」里设一个快捷键", "A shortcut can be set in General"))
-                }
+                Toggle(tr("在刘海处显示灵动岛", "Show the island at the notch"), isOn: $enabled)
                 if enabled {
                     Picker(tr("待办显示方式", "Today's tasks"), selection: $taskStyle) {
                         Text(tr("刘海下的胶囊", "Capsule under the notch")).tag(TaskStyle.capsule.rawValue)
@@ -342,7 +335,7 @@ private struct HelpPane: View {
                 ReferenceRow(example: tr("在刘海上双指左右滑", "Two-finger swipe sideways on the notch"), meaning: tr("下一首 / 上一首", "Next / previous track"))
                 ReferenceRow(example: tr("在刘海上双指下滑", "Two-finger swipe down on the notch"), meaning: tr("展开", "Open"))
                 ReferenceRow(example: tr("展开后双指上下滑 · 滚动鼠标滚轮 · 点边上的圆点", "Once open, swipe up / down · scroll the wheel · the dots at the edge"), meaning: tr("切换正在播放 / 系统状态", "Switch Now Playing / Status"))
-                ReferenceRow(example: settings.islandHotKey?.displayString ?? tr("通用里设置的快捷键", "The shortcut set in General"), meaning: tr("显示 / 关闭灵动岛", "Show / hide the island"))
+                ReferenceRow(example: settings.islandHotKey?.displayString ?? tr("通用里设置的快捷键", "The shortcut set in General"), meaning: tr("展开 / 收起灵动岛", "Open / close the island"))
                 ReferenceRow(example: tr("在胶囊上双指右滑 / 左滑", "Two-finger swipe right / left on the capsule"), meaning: tr("完成 / 推迟到明天", "Complete / move to tomorrow"))
                 ReferenceRow(example: tr("右键刘海或胶囊", "Right-click the notch or capsule"), meaning: tr("菜单与设置", "Menu & settings"))
             }

@@ -26,7 +26,6 @@ private struct MenuBarContent: View {
             .keyboardShortcut(settings.hotKey?.keyboardShortcut)
         Toggle(tr("始终置顶", "Always on Top"), isOn: $pinned)
         Toggle(tr("刘海灵动岛", "Notch Island"), isOn: $islandEnabled)
-            .keyboardShortcut(settings.islandHotKey?.keyboardShortcut)
         Divider()
         FocusMenuItems()
         Button(tr("系统状态面板", "System Status Panel")) { app.status.showPanel() }

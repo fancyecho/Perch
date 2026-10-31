@@ -42,7 +42,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let hotKey = GlobalHotKey { [weak self] in self?.toggleTasks() }
         self.hotKey = hotKey
         settings.hotKeyRegistrar = { [weak hotKey] combo in hotKey?.register(combo) ?? .unavailable }
-        let islandHotKey = GlobalHotKey(id: 3) { [weak self] in self?.toggleIsland() }
+        let islandHotKey = GlobalHotKey(id: 3) { [weak self] in self?.island?.toggleExpanded() }
         self.islandHotKey = islandHotKey
         settings.islandHotKeyRegistrar = { [weak islandHotKey] combo in islandHotKey?.register(combo) ?? .unavailable }
 
@@ -150,13 +150,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             controller?.go(.panel, focusInput: focusInput)
         }
-    }
-
-    /// Shows or hides the notch island, as its switch in Settings does.
-    func toggleIsland() {
-        let defaults = UserDefaults.standard
-        defaults.set(!defaults.bool(forKey: Pref.islandEnabled), forKey: Pref.islandEnabled)
-        Haptics.tick()
     }
 
     func toggleTasks() {

@@ -1,5 +1,6 @@
 #if DEBUG
 import AppKit
+import SwiftUI
 
 /// Lets a script drive Perch while developing, for screenshots of states that otherwise need the
 /// pointer: `swift scripts/poke.swift status`. Debug builds only.
@@ -29,6 +30,7 @@ extension AppDelegate {
             case "memory": .memory
             case "temperature": .temperature
             case "network": .network
+            case "disk": .disk
             default: .cpu
             }
             island?.model.metricHandler?(metric)
@@ -41,6 +43,54 @@ extension AppDelegate {
         case "alert":
             _ = island?.showAlert(SystemAlert(id: "debug", kind: .hot, title: tr("CPU 温度 96°C", "CPU at 96°C"),
                                               detail: tr("已经持续一分钟以上处于高温，可以看看是哪个进程在满负荷运行。", "It has been this hot for over a minute.")))
+        case "glow":
+            switch parts.dropFirst().first {
+            case "celebration": island?.celebrate()
+            case "low": island?.debugGlow(.lowBattery)
+            case "alert": island?.debugGlow(.alert)
+            default: island?.debugGlow(.charging)
+            }
+        case "snapglow":
+            // Frames of the glow's pass over a stand-in island, written next to the given path.
+            let out = parts.dropFirst().joined(separator: ":")
+            let shape = NotchShape(shoulder: 6, cornerRadius: 13)
+            for glow in [IslandGlow.charging, .celebration] {
+                for head in [0.35, 0.75, 1.1] {
+                    let view = ZStack {
+                        Color(white: 0.55)
+                        shape.fill(.black).frame(width: 220, height: 38)
+                            .overlay { GlowLight(glow: glow, shape: shape, head: head) }
+                            .frame(maxHeight: .infinity, alignment: .top)
+                    }
+                    .frame(width: 280, height: 70)
+                    let renderer = ImageRenderer(content: view)
+                    renderer.scale = 2
+                    if let image = renderer.nsImage, let tiff = image.tiffRepresentation,
+                       let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) {
+                        try? png.write(to: URL(fileURLWithPath: "\(out)-\(glow)-\(head).png"))
+                    }
+                }
+            }
+        case "snaplevels":
+            // Volume and brightness bars at a few levels, written next to the given path.
+            let out = parts.dropFirst().joined(separator: ":")
+            let rows = VStack(alignment: .leading, spacing: 4) {
+                ForEach([0.3, 0.625, 0.6875, 0.8125, 0.875, 1.0], id: \.self) { value in
+                    HStack(spacing: 24) {
+                        LevelBar(hud: LevelHUD(kind: .volume, value: value)).frame(width: 74)
+                        LevelBar(hud: LevelHUD(kind: .brightness, value: value)).frame(width: 74)
+                    }
+                }
+            }
+            .padding(14)
+            .background(Color.black)
+            .environment(\.colorScheme, .dark)
+            let renderer = ImageRenderer(content: rows)
+            renderer.scale = 2
+            if let tiff = renderer.nsImage?.tiffRepresentation,
+               let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) {
+                try? png.write(to: URL(fileURLWithPath: out + "-levels.png"))
+            }
         case "pass": focus.debugGrantPass(parts.dropFirst().first ?? "com.apple.Safari")
         case "endpass": focus.passes.forEach { focus.endPass($0.key) }
         case "testrule":

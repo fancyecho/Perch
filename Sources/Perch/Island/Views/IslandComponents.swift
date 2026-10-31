@@ -43,20 +43,20 @@ struct ArtworkView: View {
     }
 }
 
-/// A little level meter that dances while something plays and settles into dots when paused: thin
-/// bars of light in the artwork's color, brightest in the middle, with a soft glow.
+/// A little level meter that dances while something plays and settles into dots when paused: a few
+/// solid, round-ended bars in a softened tone of the artwork, the middle ones reaching highest.
 struct EqualizerBars: View {
     let isPlaying: Bool
     var tint: Color = .white
-    var barCount = 5
-    var barWidth: CGFloat = 2.4
-    var spacing: CGFloat = 2.2
+    var barCount = 4
+    var barWidth: CGFloat = 2.6
+    var spacing: CGFloat = 2.4
     var maxHeight: CGFloat = 14
 
     var body: some View {
         EqualizerLayers(isPlaying: isPlaying, color: NSColor(tint), barCount: barCount, barWidth: barWidth, spacing: spacing)
             .frame(width: CGFloat(barCount) * (barWidth + spacing) - spacing, height: maxHeight)
-            .opacity(isPlaying ? 1 : 0.5)
+            .opacity(isPlaying ? 1 : 0.45)
             .animation(.smooth(duration: 0.4), value: isPlaying)
             .accessibilityHidden(true)
     }
@@ -81,24 +81,20 @@ private struct EqualizerLayers: NSViewRepresentable {
 }
 
 final class EqualizerNSView: NSView {
-    private let bars: [CAGradientLayer]
+    private let bars: [CALayer]
     private let barWidth: CGFloat
     private var isPlaying = false
     private var color: NSColor?
 
     init(barCount: Int, barWidth: CGFloat, spacing: CGFloat) {
         self.barWidth = barWidth
-        bars = (0..<barCount).map { _ in CAGradientLayer() }
+        bars = (0..<barCount).map { _ in CALayer() }
         super.init(frame: .zero)
         wantsLayer = true
-        layer?.shadowOffset = .zero
-        layer?.shadowRadius = 2.5
-        layer?.shadowOpacity = 0.55
         for (index, bar) in bars.enumerated() {
             bar.cornerRadius = barWidth / 2
-            bar.startPoint = CGPoint(x: 0.5, y: 0)
-            bar.endPoint = CGPoint(x: 0.5, y: 1)
-            bar.frame = CGRect(x: CGFloat(index) * (barWidth + spacing), y: 0, width: barWidth, height: 0)
+            bar.cornerCurve = .circular
+            bar.frame = CGRect(x: CGFloat(index) * (barWidth + spacing), y: 0, width: barWidth, height: barWidth)
             layer?.addSublayer(bar)
         }
     }
@@ -108,62 +104,67 @@ final class EqualizerNSView: NSView {
 
     override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
-        layoutBars()
-    }
-
-    private func layoutBars() {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         for bar in bars {
-            bar.bounds.size.height = bounds.height
             bar.position.y = bounds.midY
-            if !isPlaying { bar.transform = restingTransform }
+            if !isPlaying { bar.bounds.size.height = barWidth }
         }
         CATransaction.commit()
+        // The dance is measured in points, so a new height needs it again.
+        if isPlaying { startDancing() }
     }
 
     func update(isPlaying playing: Bool, color newColor: NSColor) {
         if newColor != color {
             color = newColor
-            // Light at the core of each bar, thinning out toward its ends.
-            let core = newColor.blended(withFraction: 0.25, of: .white) ?? newColor
-            let colors = [newColor.withAlphaComponent(0.55).cgColor, core.cgColor, newColor.withAlphaComponent(0.55).cgColor]
+            let tone = Self.tone(of: newColor).cgColor
             CATransaction.begin()
             CATransaction.setDisableActions(true)
-            bars.forEach { $0.colors = colors }
-            layer?.shadowColor = newColor.cgColor
+            bars.forEach { $0.backgroundColor = tone }
             CATransaction.commit()
         }
         guard playing != isPlaying else { return }
         isPlaying = playing
         if playing {
-            for (index, bar) in bars.enumerated() {
-                bar.add(Self.dance(for: index, of: bars.count), forKey: "dance")
-            }
+            startDancing()
         } else {
             // Freeze each bar where it is, then let it settle into a dot.
             CATransaction.begin()
             CATransaction.setDisableActions(true)
             for bar in bars {
-                if let current = bar.presentation()?.transform { bar.transform = current }
+                if let current = bar.presentation()?.bounds { bar.bounds = current }
                 bar.removeAnimation(forKey: "dance")
             }
             CATransaction.commit()
             CATransaction.begin()
             CATransaction.setAnimationDuration(0.35)
             CATransaction.setAnimationTimingFunction(CAMediaTimingFunction(name: .easeOut))
-            bars.forEach { $0.transform = restingTransform }
+            bars.forEach { $0.bounds.size.height = barWidth }
             CATransaction.commit()
         }
     }
 
-    private var restingTransform: CATransform3D {
-        CATransform3DMakeScale(1, bounds.height > 0 ? min(barWidth / bounds.height, 1) : 1, 1)
+    /// The artwork's color, calmed: never so dark it sinks into the black island, never so
+    /// saturated it shouts.
+    private static func tone(of color: NSColor) -> NSColor {
+        guard let rgb = color.usingColorSpace(.sRGB) else { return .white }
+        var hue: CGFloat = 0, saturation: CGFloat = 0, brightness: CGFloat = 0, alpha: CGFloat = 0
+        rgb.getHue(&hue, saturation: &saturation, brightness: &brightness, alpha: &alpha)
+        return NSColor(hue: hue, saturation: min(saturation, 0.55), brightness: max(brightness, 0.92), alpha: 1)
+    }
+
+    private func startDancing() {
+        guard bounds.height > 0 else { return }
+        for (index, bar) in bars.enumerated() {
+            bar.add(Self.dance(for: index, of: bars.count, height: bounds.height, floor: barWidth), forKey: "dance")
+        }
     }
 
     /// Out-of-step loops of different lengths per bar read as music without listening to any; the
-    /// middle bars reach highest, so the meter has a shape rather than a row of equal sticks.
-    private static func dance(for index: Int, of count: Int) -> CAKeyframeAnimation {
+    /// middle bars reach highest, so the meter has a shape rather than a row of equal sticks. The
+    /// height itself animates, not a stretch, so the bars keep their round ends.
+    private static func dance(for index: Int, of count: Int, height: CGFloat, floor: CGFloat) -> CAKeyframeAnimation {
         let patterns: [[Double]] = [
             [0.30, 0.82, 0.45, 1.00, 0.35, 0.70, 0.50, 0.92, 0.30],
             [0.62, 0.28, 0.95, 0.48, 0.78, 0.32, 0.88, 0.55, 0.62],
@@ -172,9 +173,9 @@ final class EqualizerNSView: NSView {
             [0.40, 0.66, 0.30, 0.90, 0.50, 0.78, 0.34, 0.60, 0.40],
         ]
         let middle = Double(count - 1) / 2
-        let reach = 1 - 0.35 * abs(Double(index) - middle) / max(middle, 1)
-        let animation = CAKeyframeAnimation(keyPath: "transform.scale.y")
-        animation.values = patterns[index % patterns.count].map { max(0.18, $0 * reach) }
+        let reach = 1 - 0.3 * abs(Double(index) - middle) / max(middle, 1)
+        let animation = CAKeyframeAnimation(keyPath: "bounds.size.height")
+        animation.values = patterns[index % patterns.count].map { max(floor, height * $0 * reach) }
         animation.duration = 1.55 + Double((index * 7) % 5) * 0.21
         animation.timeOffset = Double(index) * 0.37
         animation.calculationMode = .cubic
@@ -270,9 +271,10 @@ struct LevelIcon: View {
     }
 }
 
-/// A slim level bar that thickens under the pointer and can be dragged to set the level. Its fill is
-/// one long gradient uncovered up to the level, so the color at the tip says how far it has gone:
-/// green while quiet, warming to orange when loud; amber to warm white for brightness.
+/// A slim level bar that thickens under the pointer and can be dragged to set the level, glowing in
+/// the color at its tip. Sound is one color for the whole bar, green that turns amber and then red
+/// as it gets loud. Brightness is a grey-to-white gradient uncovered up to the level, so a brighter
+/// screen shows more white and glows more.
 struct LevelBar: View {
     let hud: LevelHUD
     var onChange: ((Double) -> Void)?
@@ -281,31 +283,52 @@ struct LevelBar: View {
     @State private var hovering = false
     @State private var dragging = false
 
-    private var stops: [RGB] {
-        guard colorful else { return [RGB(red: 1, green: 1, blue: 1), RGB(red: 1, green: 1, blue: 1)] }
+    /// Colors at points along the level; between them the fill blends from one to the next.
+    private var stops: [(at: Double, color: RGB)] {
+        guard colorful else { return [(0, RGB(red: 1, green: 1, blue: 1))] }
         switch hud.kind {
         case .volume:
-            return [RGB(red: 0.32, green: 0.86, blue: 0.48), RGB(red: 0.98, green: 0.84, blue: 0.27), RGB(red: 1, green: 0.52, blue: 0.24)]
+            // Three colors, each held over its stretch with only a step's blend between them, so the
+            // whole bar changes at once: green up to ten steps of sixteen, amber to thirteen, then red.
+            let green = RGB(red: 0.3, green: 0.86, blue: 0.5)
+            let amber = RGB(red: 1, green: 0.76, blue: 0.26)
+            let red = RGB(red: 1, green: 0.34, blue: 0.3)
+            return [(0.63, green), (0.68, amber), (0.82, amber), (0.87, red)]
         case .brightness:
-            return [RGB(red: 0.96, green: 0.6, blue: 0.2), RGB(red: 1, green: 0.84, blue: 0.4), RGB(red: 1, green: 0.97, blue: 0.86)]
+            return [(0, RGB(red: 0.36, green: 0.36, blue: 0.39)), (1, RGB(red: 1, green: 1, blue: 1))]
         case .keyboard:
-            return [RGB(red: 0.42, green: 0.56, blue: 0.95), RGB(red: 0.86, green: 0.9, blue: 1)]
+            return [(0, RGB(red: 0.4, green: 0.45, blue: 0.58)), (1, RGB(red: 0.86, green: 0.9, blue: 1))]
         }
     }
 
     var body: some View {
         let value = hud.isSilent ? 0 : hud.value
         let thickness: CGFloat = hovering || dragging ? 7 : 5
+        let color = Self.color(at: value, in: stops)
+        let solid = hud.kind == .volume || !colorful
+        // White light only glows as much as it's bright; color glows the same throughout.
+        let glow = value > 0 ? (hud.kind == .volume || !colorful ? 1 : 0.35 + 0.65 * value) : 0
         GeometryReader { proxy in
             let width = proxy.size.width
             ZStack(alignment: .leading) {
                 Capsule().fill(Color.white.opacity(0.14))
-                Capsule()
-                    .fill(LinearGradient(colors: stops.map(\.color), startPoint: .leading, endPoint: .trailing))
-                    .mask(alignment: .leading) {
-                        Capsule().frame(width: value > 0 ? max(width * value, thickness) : 0)
+                let filled = value > 0 ? max(width * value, thickness) : 0
+                Group {
+                    if solid {
+                        Capsule().fill(color)
+                    } else {
+                        // Stretched across the whole track, so its grey end stays put and only the
+                        // white end comes and goes with the level.
+                        Capsule()
+                            .fill(LinearGradient(colors: stops.map(\.color.color), startPoint: .leading, endPoint: .trailing))
+                            .frame(width: width)
+                            .frame(width: filled, alignment: .leading)
+                            .clipShape(.capsule)
                     }
-                    .shadow(color: Self.color(at: value, in: stops).opacity(value > 0 ? 0.55 : 0), radius: 5)
+                }
+                .frame(width: filled)
+                .shadow(color: color.opacity(0.6 * glow), radius: 2)
+                .shadow(color: color.opacity(0.4 * glow), radius: 7)
             }
             .frame(height: thickness)
             .frame(maxHeight: .infinity)
@@ -321,7 +344,7 @@ struct LevelBar: View {
         }
         .frame(height: 22)
         .onHover { hovering = $0 }
-        .animation(dragging ? nil : .snappy(duration: 0.25), value: value)
+        .animation(dragging ? .smooth(duration: 0.2) : .snappy(duration: 0.25), value: value)
         .animation(.snappy(duration: 0.2), value: thickness)
         .accessibilityElement()
         .accessibilityValue("\(Int((value * 100).rounded()))%")
@@ -331,14 +354,23 @@ struct LevelBar: View {
         }
     }
 
-    /// The gradient's color at a point along it, for the glow at the tip.
-    static func color(at fraction: Double, in stops: [RGB]) -> Color {
-        guard stops.count > 1 else { return stops.first?.color ?? .white }
-        let position = min(max(fraction, 0), 1) * Double(stops.count - 1)
-        let index = min(Int(position), stops.count - 2)
-        let t = position - Double(index)
-        let a = stops[index], b = stops[index + 1]
-        return RGB(red: a.red + (b.red - a.red) * t, green: a.green + (b.green - a.green) * t, blue: a.blue + (b.blue - a.blue) * t).color
+    /// The fill's color at a level: the nearest stop's below the first and above the last, blended
+    /// between neighbors round the color wheel, so green turns amber through clear yellows rather
+    /// than through a muddy olive.
+    static func color(at fraction: Double, in stops: [(at: Double, color: RGB)]) -> Color {
+        guard let first = stops.first, let last = stops.last else { return .white }
+        let x = min(max(fraction, 0), 1)
+        if x <= first.at { return first.color.color }
+        if x >= last.at { return last.color.color }
+        let upper = stops.firstIndex { $0.at >= x } ?? stops.count - 1
+        let a = stops[upper - 1], b = stops[upper]
+        let t = (x - a.at) / max(b.at - a.at, 0.0001)
+        let from = a.color.hsb, to = b.color.hsb
+        var hueStep = to.hue - from.hue
+        if abs(hueStep) > 0.5 { hueStep -= hueStep.sign == .minus ? -1 : 1 }
+        let hue = (from.hue + hueStep * t).truncatingRemainder(dividingBy: 1)
+        return Color(hue: hue < 0 ? hue + 1 : hue, saturation: from.saturation + (to.saturation - from.saturation) * t,
+                     brightness: from.brightness + (to.brightness - from.brightness) * t)
     }
 }
 

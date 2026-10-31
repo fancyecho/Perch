@@ -255,6 +255,12 @@ final class IslandController {
         updateStatusWatch()
     }
 
+    /// The shortcut's way in and out: opened this way it stays open, wherever the pointer is, until
+    /// the shortcut is pressed again or the pointer passes over it and leaves.
+    func toggleExpanded() {
+        model.isExpanded ? collapse() : expand()
+    }
+
     /// Processes, disk, Wi-Fi and latency are only sampled while the status page is on screen.
     private func updateStatusWatch() {
         status.watch("island", model.isExpanded && model.page == .status && focus.passes.isEmpty)
@@ -555,6 +561,10 @@ final class IslandController {
     func celebrate() {
         flash(.celebration)
     }
+
+    #if DEBUG
+    func debugGlow(_ glow: IslandGlow) { flash(glow) }
+    #endif
 
     private func flash(_ glow: IslandGlow) {
         glowTask?.cancel()

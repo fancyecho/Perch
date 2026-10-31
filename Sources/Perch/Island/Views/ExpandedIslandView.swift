@@ -395,11 +395,14 @@ private struct StatusGlance: View {
     }
 }
 
-/// The battery, the headphones and where the sound goes, as one quiet line.
+/// The battery, the headphones and where the sound goes, as one quiet line, with the disk's free
+/// space at its far end (a click shows the disk below).
 private struct StatusHeader: View {
     @Environment(SystemVolume.self) private var volume
     @Environment(BluetoothMonitor.self) private var bluetooth
     @Environment(PowerMonitor.self) private var power
+    @Environment(SystemMonitor.self) private var monitor
+    @Environment(IslandModel.self) private var model
 
     var body: some View {
         HStack(spacing: 14) {
@@ -425,11 +428,37 @@ private struct StatusHeader: View {
                     Text(volume.route.name)
                 }
             }
+            Spacer(minLength: 8)
+            if monitor.disk.total > 0 {
+                diskButton
+            }
         }
         .font(.system(size: 11, weight: .medium).monospacedDigit())
         .foregroundStyle(.white.opacity(0.62))
         .lineLimit(1)
         .padding(.horizontal, 6)
+    }
+
+    private var diskButton: some View {
+        let selected = model.statusMetric == .disk
+        let low = monitor.disk.usedPercent >= 90
+        return Button { model.metricHandler?(.disk) } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "internaldrive")
+                Text(tr("\(Fmt.bytes(monitor.disk.free)) 可用", "\(Fmt.bytes(monitor.disk.free)) free"))
+            }
+            .foregroundStyle(low ? AnyShapeStyle(Color.orange) : AnyShapeStyle(.white.opacity(selected ? 0.9 : 0.62)))
+            .padding(.horizontal, 7)
+            .padding(.vertical, 2)
+            .background(Capsule().fill(Color.white.opacity(selected ? 0.09 : 0)))
+            .contentShape(.capsule)
+            .fixedSize()
+        }
+        .buttonStyle(.plain)
+        .padding(.trailing, -7)
+        .animation(.smooth(duration: 0.25), value: selected)
+        .help(monitor.disk.name)
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 }
 
@@ -451,12 +480,16 @@ private struct SystemGauges: View {
             }
             if let celsius = monitor.temperature?.cpu {
                 tile(.temperature) {
-                    MiniGauge(symbol: "thermometer.medium", fraction: (celsius - 30) / 70, value: "\(Int(celsius.rounded()))°",
-                              label: tr("温度", "Temp"), tint: StatusDetail.temperatureTint(celsius))
+                    MiniGauge(symbol: celsius >= 75 ? "thermometer.high" : celsius >= 50 ? "thermometer.medium" : "thermometer.low",
+                              fraction: (celsius - 25) / 75, value: "\(Int(celsius.rounded()))°",
+                              label: tr("温度", "Temp"), tint: StatusDetail.temperatureTint(celsius), arc: Self.heat)
                 }
             }
             tile(.network) {
-                NetworkGauge(down: monitor.network.down, up: monitor.network.up)
+                // Measured against the last two minutes' busiest moment, so the ring shows how busy
+                // the link is now compared with lately, and a quiet link stays near empty.
+                let peak = max(monitor.downHistory.max() ?? 0, monitor.upHistory.max() ?? 0, 256_000)
+                NetworkGauge(down: monitor.network.down, up: monitor.network.up, peak: peak)
             }
         }
     }
@@ -478,6 +511,14 @@ private struct SystemGauges: View {
         .accessibilityAddTraits(selected ? .isSelected : [])
     }
 
+    /// Temperature along the ring: cool mint where it starts, warming to amber and red as it
+    /// wraps round, so a hot reading carries its color at the tip.
+    private static let heat = AnyShapeStyle(AngularGradient(
+        stops: [.init(color: .mint, location: 0), .init(color: .mint, location: 0.3),
+                .init(color: .yellow, location: 0.55), .init(color: .orange, location: 0.75),
+                .init(color: Color(red: 1, green: 0.32, blue: 0.3), location: 1)],
+        center: .center, startAngle: .degrees(-8), endAngle: .degrees(352)))
+
     /// Past 90% a gauge turns red.
     private func tint(_ base: Color, _ percent: Double) -> Color {
         percent >= 90 ? Color(red: 1, green: 0.38, blue: 0.36) : base
@@ -493,10 +534,15 @@ private struct StatusDetail: View {
     var body: some View {
         let facts = facts
         VStack(alignment: .leading, spacing: 4) {
-            HStack(alignment: .firstTextBaseline) {
-                Text(facts.0)
-                    .font(.system(size: 11, weight: .semibold).monospacedDigit())
-                    .foregroundStyle(.white.opacity(0.85))
+            HStack {
+                if model.statusMetric == .disk {
+                    DiskUsageBar(disk: monitor.disk)
+                        .accessibilityLabel(facts.0)
+                } else {
+                    Text(facts.0)
+                        .font(.system(size: 11, weight: .semibold).monospacedDigit())
+                        .foregroundStyle(.white.opacity(0.85))
+                }
                 Spacer(minLength: 8)
                 Text(facts.1)
                     .font(.system(size: 10.5, weight: .medium).monospacedDigit())
@@ -522,6 +568,8 @@ private struct StatusDetail: View {
             Sparkline(values: monitor.temperatureHistory, maxValue: 100, tint: Self.temperatureTint(monitor.temperature?.cpu ?? 40))
         case .network:
             MirrorChart(top: monitor.downHistory, bottom: monitor.upHistory, topTint: Palette.down, bottomTint: Palette.up)
+        case .disk:
+            MirrorChart(top: monitor.diskReadHistory, bottom: monitor.diskWriteHistory, topTint: Palette.disk, bottomTint: Palette.down)
         }
     }
 
@@ -562,11 +610,46 @@ private struct StatusDetail: View {
                 link = tr("有线网络", "Wired")
             }
             return (tr("峰值 ↓ \(Fmt.rate(down))  ↑ \(Fmt.rate(up))", "Peak ↓ \(Fmt.rate(down))  ↑ \(Fmt.rate(up))"), link, nil)
+        case .disk:
+            let d = monitor.disk
+            let used = Fmt.bytes(d.total - d.free), total = Fmt.bytes(d.total)
+            return (tr("已用 \(used) / \(total) · \(Fmt.percent(d.usedPercent))%", "\(used) of \(total) used · \(Fmt.percent(d.usedPercent))%"),
+                    tr("读 \(Fmt.rate(d.read)) · 写 \(Fmt.rate(d.write))", "read \(Fmt.rate(d.read)) · write \(Fmt.rate(d.write))"),
+                    d.usedPercent >= 90 ? .orange : nil)
         }
     }
 
     static func temperatureTint(_ celsius: Double) -> Color {
         celsius >= 90 ? .red : celsius >= 75 ? .orange : .mint
+    }
+}
+
+/// How full the disk is, as a bar with its share beside it; the sizes are in the tooltip.
+private struct DiskUsageBar: View {
+    let disk: DiskSnapshot
+
+    var body: some View {
+        let fraction = min(max(disk.usedPercent / 100, 0), 1)
+        let tint = disk.usedPercent >= 90 ? Color.orange : Palette.disk
+        HStack(spacing: 7) {
+            Capsule()
+                .fill(Color.white.opacity(0.12))
+                .overlay(alignment: .leading) {
+                    GeometryReader { proxy in
+                        Capsule()
+                            .fill(LinearGradient(colors: [tint.opacity(0.75), tint], startPoint: .leading, endPoint: .trailing))
+                            .frame(width: max(proxy.size.height, proxy.size.width * fraction))
+                    }
+                }
+                .frame(width: 132, height: 5)
+                .animation(.smooth(duration: 0.6), value: fraction)
+            Text("\(Fmt.percent(disk.usedPercent))%")
+                .font(.system(size: 11, weight: .semibold).monospacedDigit())
+                .foregroundStyle(.white.opacity(0.85))
+                .fixedSize()
+        }
+        .layoutPriority(1)
+        .help(tr("已用 \(Fmt.bytes(disk.total - disk.free)) / \(Fmt.bytes(disk.total))", "\(Fmt.bytes(disk.total - disk.free)) of \(Fmt.bytes(disk.total)) used"))
     }
 }
 
@@ -576,6 +659,8 @@ private struct MiniGauge: View {
     let value: String
     let label: String
     let tint: Color
+    /// What the arc is drawn with, when it's more than the tint.
+    var arc: AnyShapeStyle?
 
     var body: some View {
         HStack(spacing: 6) {
@@ -583,7 +668,7 @@ private struct MiniGauge: View {
                 Circle().stroke(Color.white.opacity(0.12), lineWidth: 2.5)
                 Circle()
                     .trim(from: 0, to: min(max(fraction, 0.02), 1))
-                    .stroke(tint, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                    .stroke(arc ?? AnyShapeStyle(tint), style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
                     .rotationEffect(.degrees(-90))
                     .animation(.smooth(duration: 0.6), value: fraction)
                 Image(systemName: symbol)
@@ -606,21 +691,41 @@ private struct MiniGauge: View {
     }
 }
 
+/// Download and upload as two halves of one ring, like the chart below it: download fills the right
+/// half clockwise from the top, upload the left half the other way.
 private struct NetworkGauge: View {
     let down: Double
     let up: Double
+    /// The rate a full half stands for.
+    let peak: Double
 
     var body: some View {
+        // A square root lifts light traffic off zero without letting a burst swamp everything else.
+        let downShare = min(sqrt(down / peak), 1) * 0.5
+        let upShare = min(sqrt(up / peak), 1) * 0.5
         HStack(spacing: 6) {
-            Image(systemName: "network")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(Palette.down)
-                .frame(width: 24, height: 24)
-                .background(Circle().stroke(Color.white.opacity(0.12), lineWidth: 2.5))
+            ZStack {
+                Circle().stroke(Color.white.opacity(0.12), lineWidth: 2.5)
+                Circle()
+                    .trim(from: 0, to: max(downShare, 0.01))
+                    .stroke(Palette.down, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                    .rotationEffect(.degrees(-90))
+                Circle()
+                    .trim(from: 1 - max(upShare, 0.01), to: 1)
+                    .stroke(Palette.up, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                    .rotationEffect(.degrees(-90))
+                Image(systemName: "network")
+                    .font(.system(size: 8.5, weight: .bold))
+                    .foregroundStyle(.white.opacity(0.75))
+            }
+            .frame(width: 24, height: 24)
+            .animation(.smooth(duration: 0.6), value: downShare)
+            .animation(.smooth(duration: 0.6), value: upShare)
             VStack(alignment: .leading, spacing: 0) {
-                Text("↓ " + Fmt.compactRate(down))
-                Text("↑ " + Fmt.compactRate(up))
-                    .foregroundStyle(.white.opacity(0.5))
+                // The arrows take their half's color, tying the numbers to the ring.
+                Text("\(Text("↓").foregroundStyle(Palette.down)) \(Fmt.compactRate(down))")
+                Text("\(Text("↑").foregroundStyle(Palette.up)) \(Fmt.compactRate(up))")
+                    .foregroundStyle(.white.opacity(0.6))
             }
             .font(.system(size: 10, weight: .semibold, design: .rounded).monospacedDigit())
             .lineLimit(1)

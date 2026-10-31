@@ -53,7 +53,7 @@ enum CardMode: Equatable {
 
 /// The detail under the status page's gauges.
 enum StatusMetric: Equatable {
-    case cpu, memory, temperature, network
+    case cpu, memory, temperature, network, disk
 }
 
 enum ReminderAction {
@@ -161,7 +161,7 @@ enum IslandPage: Equatable {
     }
 }
 
-/// A light that runs once around the island's edge.
+/// A light that passes once along the island's lower lip.
 enum IslandGlow: Equatable {
     case charging, celebration, lowBattery
     /// Something about the Mac needs a look: running hot, short of memory or disk.

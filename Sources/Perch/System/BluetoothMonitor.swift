@@ -271,11 +271,8 @@ final class BluetoothMonitor: NSObject {
         let product = (device.value(forKey: "productID") as? NSNumber)?.intValue
         if vendor == 0x004C, let product, let symbol = AppleAudioModel.symbol(for: product) { return symbol }
 
+        if let symbol = SystemVolume.symbol(forName: device.name ?? "") { return symbol.name }
         let name = (device.name ?? "").lowercased()
-        if name.contains("airpods max") { return "airpods.max" }
-        if name.contains("airpods pro") { return "airpods.pro" }
-        if name.contains("airpods") { return "airpods" }
-        if name.contains("beats") { return "beats.headphones" }
         if name.contains("trackpad") { return "rectangle.and.hand.point.up.left.fill" }
         if name.contains("magic mouse") { return "magicmouse.fill" }
 

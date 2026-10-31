@@ -49,34 +49,78 @@ private struct IslandShape: View {
     }
 }
 
-/// A light that runs once around the island's edge: green when charging starts, a rainbow when
-/// today is cleared, a red pulse when the battery runs low.
+/// A light that passes once along the island's lower lip: green when charging starts, a spectrum
+/// when today is cleared, red when the battery runs low, amber for an alert. It keeps to the rounded
+/// bottom, where the island meets the screen, and never reaches the flat top or its pointed shoulders.
 private struct GlowRing: View {
     let glow: IslandGlow
     let shape: NotchShape
-    @State private var turn = 0.0
+    /// Where the light's head is along the lip: it enters from the left end and leaves past the right.
+    @State private var head = 0.0
 
-    /// Colors go all the way round: a gradient with a gap blinks out each time the gap passes
-    /// the top edge, which sits off screen.
+    var body: some View {
+        GlowLight(glow: glow, shape: shape, head: head)
+            .onAppear {
+                withAnimation(.easeInOut(duration: 1.6)) { head = 1 + GlowLight.tail }
+            }
+    }
+}
+
+/// The glow at one moment of its pass.
+struct GlowLight: View, Animatable {
+    let glow: IslandGlow
+    let shape: NotchShape
+    var head: Double
+
+    static let tail = 0.4
+
+    var animatableData: Double {
+        get { head }
+        set { head = newValue }
+    }
+
     private var colors: [Color] {
         switch glow {
-        case .charging: [.green, .mint, .green, .mint, .green]
-        case .celebration: [.pink, .orange, .yellow, .green, .cyan, .blue, .purple, .pink]
-        case .lowBattery: [.red, .orange, .red, .orange, .red]
-        case .alert: [.orange, .yellow, .orange, .red, .orange]
+        case .charging: [Color(red: 0.35, green: 0.95, blue: 0.6), Color(red: 0.55, green: 1, blue: 0.75)]
+        case .celebration: [.pink, .orange, .yellow, .green, .cyan, .blue, .purple]
+        case .lowBattery: [Color(red: 1, green: 0.32, blue: 0.3), Color(red: 1, green: 0.5, blue: 0.35)]
+        case .alert: [Color(red: 1, green: 0.62, blue: 0.2), Color(red: 1, green: 0.78, blue: 0.3)]
         }
     }
 
     var body: some View {
-        let gradient = AngularGradient(colors: colors, center: .center, angle: .degrees(turn * 360))
+        let lip = NotchLip(shoulder: shape.shoulder, cornerRadius: shape.cornerRadius)
+        let palette = LinearGradient(colors: colors, startPoint: .leading, endPoint: .trailing)
         ZStack {
-            shape.stroke(gradient, lineWidth: 6).blur(radius: 6).opacity(0.8)
-            shape.stroke(gradient, lineWidth: 1.5)
+            // The edge lit faintly the whole time, so the light seems to come from the island.
+            lip.stroke(palette, style: StrokeStyle(lineWidth: 1, lineCap: .round))
+                .opacity(0.35)
+            // The light itself, a wide soft bloom under a fine bright line. Overlapping lengths
+            // stack up brightest at the head, so the tail fades out behind it.
+            ForEach(1...4, id: \.self) { step in
+                passing(lip, Self.tail * Double(step) / 4)
+                    .stroke(palette, style: StrokeStyle(lineWidth: 7, lineCap: .round))
+                    .blur(radius: 6)
+                    .opacity(0.3)
+            }
+            ForEach(1...8, id: \.self) { step in
+                passing(lip, Self.tail * Double(step) / 8)
+                    .stroke(palette, style: StrokeStyle(lineWidth: 1.4, lineCap: .round))
+                    .opacity(0.22)
+            }
+        }
+        // The lip's ends fade into the island's sides instead of stopping.
+        .mask {
+            LinearGradient(stops: [.init(color: .clear, location: 0.2), .init(color: .white, location: 0.75)],
+                           startPoint: .top, endPoint: .bottom)
+                .padding(-12)
         }
         .allowsHitTesting(false)
-        .onAppear {
-            withAnimation(.easeInOut(duration: 1.6)) { turn = 1 }
-        }
+    }
+
+    /// The stretch of the lip from the head back by `length`.
+    private func passing(_ lip: NotchLip, _ length: Double) -> some Shape {
+        lip.trim(from: max(0, head - length), to: min(1, max(0, head)))
     }
 }
 
@@ -211,6 +255,45 @@ nonisolated struct NotchShape: Shape {
             control2: CGPoint(x: rect.maxX - s * k, y: rect.minY)
         )
         path.closeSubpath()
+        return path
+    }
+}
+
+/// The island's lower lip, as an open line: partway down each side, around the bottom corners and
+/// across, matching `NotchShape`.
+nonisolated struct NotchLip: Shape {
+    var shoulder: CGFloat
+    var cornerRadius: CGFloat
+
+    var animatableData: AnimatablePair<CGFloat, CGFloat> {
+        get { AnimatablePair(shoulder, cornerRadius) }
+        set {
+            shoulder = newValue.first
+            cornerRadius = newValue.second
+        }
+    }
+
+    func path(in rect: CGRect) -> Path {
+        let s = max(min(shoulder, rect.width / 4, rect.height / 2), 0)
+        let r = max(min(cornerRadius, (rect.width - s * 2) / 2, rect.height - s), 0)
+        let k: CGFloat = 0.552
+        // Halfway up the straight part of the sides, well below the shoulders.
+        let top = rect.maxY - r - (rect.height - s - r) * 0.5
+        var path = Path()
+        path.move(to: CGPoint(x: rect.minX + s, y: top))
+        path.addLine(to: CGPoint(x: rect.minX + s, y: rect.maxY - r))
+        path.addCurve(
+            to: CGPoint(x: rect.minX + s + r, y: rect.maxY),
+            control1: CGPoint(x: rect.minX + s, y: rect.maxY - r * (1 - k)),
+            control2: CGPoint(x: rect.minX + s + r * (1 - k), y: rect.maxY)
+        )
+        path.addLine(to: CGPoint(x: rect.maxX - s - r, y: rect.maxY))
+        path.addCurve(
+            to: CGPoint(x: rect.maxX - s, y: rect.maxY - r),
+            control1: CGPoint(x: rect.maxX - s - r * (1 - k), y: rect.maxY),
+            control2: CGPoint(x: rect.maxX - s, y: rect.maxY - r * (1 - k))
+        )
+        path.addLine(to: CGPoint(x: rect.maxX - s, y: top))
         return path
     }
 }

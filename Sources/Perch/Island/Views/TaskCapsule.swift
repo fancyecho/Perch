@@ -119,15 +119,21 @@ private struct CapsuleRow: View {
     }
 
     /// Dayline's time takes the capsule now and then (see CapsuleClockMode), and for good when
-    /// there's nothing left to do. Never while it's being looked at or swiped, while a task is being
-    /// focused on, or when the task is late or due within a quarter of an hour.
+    /// there's nothing left to do. Never while it's being looked at or swiped, or while its task is
+    /// being focused on. A late task, or one due within a quarter of an hour, still lets the time
+    /// through, since a task can stay late all day.
     private var showsClock: Bool {
         let mode = CapsuleClockMode(rawValue: clockMode) ?? .onTheMinute
         guard mode != .off, !hovering, model.capsuleSwipe == 0 else { return false }
         guard let headline = store.headline(now: now) else { return true }
-        if store.focus?.taskID == headline.id || DateText.isOverdue(headline, now: now) { return false }
-        if let time = headline.schedule?.time, time > now, time.timeIntervalSince(now) < 15 * 60 { return false }
-        return mode.showsClock(at: now)
+        if store.focus?.taskID == headline.id { return false }
+        return mode.showsClock(at: now, urgentTask: isUrgent(headline))
+    }
+
+    private func isUrgent(_ task: TaskItem) -> Bool {
+        if DateText.isOverdue(task, now: now) { return true }
+        guard let time = task.schedule?.time else { return false }
+        return time > now && time.timeIntervalSince(now) < 15 * 60
     }
 
     private var content: some View {
@@ -231,8 +237,11 @@ private struct ScheduleHalo: View {
             .trim(from: 0, to: 1 - occurrence.progress(at: now))
             .stroke(color, style: StrokeStyle(lineWidth: 1.6, lineCap: .round))
             .rotationEffect(.degrees(-90))
-            .shadow(color: color.opacity(0.6), radius: 2.5)
-            .animation(.smooth(duration: 0.8), value: occurrence.progress(at: now))
+            // A flame's light: tight and bright at the line, a softer halo around it.
+            .shadow(color: color.opacity(0.75), radius: 1.5)
+            .shadow(color: color.opacity(0.4), radius: 4)
+            // No animation of its own: it burns down by a hair a second, and an animation here would
+            // also take over the hover's resize and drag the ring behind the progress ring.
             .help(tr("\(occurrence.rule.name) · \(ScheduleText.moment(occurrence.end, from: now)) 结束", "\(occurrence.rule.name) · ends \(ScheduleText.moment(occurrence.end, from: now))"))
     }
 }

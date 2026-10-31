@@ -244,12 +244,10 @@ final class SystemVolume {
         address = Self.address(kAudioDevicePropertyDataSource)
         AudioObjectGetPropertyData(device, &address, 0, nil, &size, &source)
 
-        let lowered = deviceName.lowercased()
+        if let symbol = symbol(forName: deviceName) {
+            return AudioRoute(name: deviceName, symbol: symbol.name, isPersonal: symbol.personal)
+        }
         let personal = { (symbol: String) in AudioRoute(name: deviceName, symbol: symbol, isPersonal: true) }
-        if lowered.contains("airpods max") { return personal("airpods.max") }
-        if lowered.contains("airpods pro") { return personal("airpods.pro") }
-        if lowered.contains("airpods") { return personal("airpods") }
-        if lowered.contains("beats") { return personal("beats.headphones") }
         switch transport {
         case kAudioDeviceTransportTypeBluetooth, kAudioDeviceTransportTypeBluetoothLE:
             return personal("headphones")
@@ -261,8 +259,33 @@ final class SystemVolume {
             return AudioRoute(name: deviceName, symbol: "airplay.audio", isPersonal: false)
         case kAudioDeviceTransportTypeBuiltIn:
             return AudioRoute(name: deviceName, symbol: "speaker.wave.2.fill", isPersonal: false)
+        case kAudioDeviceTransportTypeVirtual, kAudioDeviceTransportTypeAggregate:
+            return AudioRoute(name: deviceName, symbol: "waveform", isPersonal: false)
         default:
             return AudioRoute(name: deviceName, symbol: "hifispeaker.fill", isPersonal: false)
         }
+    }
+
+    /// What a device's name gives away, before falling back on how it's connected: wired EarPods
+    /// over USB-C or Lightning would otherwise pass for a speaker.
+    nonisolated static func symbol(forName name: String) -> (name: String, personal: Bool)? {
+        let lowered = name.lowercased()
+        let has = { (words: [String]) in words.contains { lowered.contains($0) } }
+        if has(["airpods max"]) { return ("airpods.max", true) }
+        if has(["airpods pro"]) { return ("airpods.pro", true) }
+        if has(["airpods 4"]) { return ("airpods.gen4", true) }
+        if has(["airpods (3", "airpods 3"]) { return ("airpods.gen3", true) }
+        if has(["airpods"]) { return ("airpods", true) }
+        if has(["earpods"]) { return ("earpods", true) }
+        if has(["powerbeats"]) { return ("beats.powerbeatspro", true) }
+        if has(["studio buds", "beats fit", "beats solo buds"]) { return ("beats.studiobudsplus", true) }
+        if has(["beats"]) { return ("beats.headphones", true) }
+        if has(["homepod mini"]) { return ("homepodmini.fill", false) }
+        if has(["homepod"]) { return ("homepod.fill", false) }
+        if has(["buds", "earbud", "earphone", "in-ear", "耳塞"]) { return ("earbuds", true) }
+        if has(["headphone", "headset", "耳机", "耳麦"]) { return ("headphones", true) }
+        if has(["studio display", "display", "monitor", "显示器"]) { return ("display", false) }
+        if has(["speaker", "soundbar", "音箱", "音响", "扬声器"]) { return ("hifispeaker.fill", false) }
+        return nil
     }
 }

@@ -25,6 +25,12 @@ enum CapsuleClockMode: String, CaseIterable {
             return true
         }
     }
+
+    /// The same, with a task that's late or nearly due: it takes turns even in a capsule that's
+    /// always the clock, so it isn't hidden until hovered. Other modes keep their rhythm.
+    func showsClock(at date: Date, urgentTask: Bool) -> Bool {
+        self == .always && urgentTask ? Self.alternate.showsClock(at: date) : showsClock(at: date)
+    }
 }
 
 /// Dayline's line of time: the date and weekday, then the time, in the app's time zone.

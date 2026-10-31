@@ -18,7 +18,7 @@ nonisolated struct HotKeyCombo: Codable, Hashable, Sendable {
     var modifiers: UInt32
 
     static let standard = HotKeyCombo(keyCode: UInt32(kVK_Space), modifiers: UInt32(optionKey))
-    /// Shows and hides the notch island.
+    /// Opens and closes the notch island.
     static let islandStandard = HotKeyCombo(keyCode: UInt32(kVK_ANSI_C), modifiers: UInt32(optionKey))
 }
 
@@ -63,7 +63,7 @@ final class AppSettings {
 
     private(set) var hotKeyStatus: HotKeyStatus = .disabled
 
-    /// Shows and hides the island; nil turns the shortcut off.
+    /// Opens and closes the island; nil turns the shortcut off.
     var islandHotKey: HotKeyCombo? {
         didSet {
             let data = islandHotKey.flatMap { try? JSONEncoder().encode($0) }

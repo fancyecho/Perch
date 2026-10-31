@@ -162,6 +162,14 @@ struct AppleAudioModelTests {
         #expect(AppleAudioModel.symbol(for: 0x1234) == nil)
     }
 
+    @Test func namesGiveAwayWiredAndOtherOutputs() {
+        #expect(SystemVolume.symbol(forName: "EarPods")?.name == "earpods")
+        #expect(SystemVolume.symbol(forName: "Rick's AirPods Pro")?.name == "airpods.pro")
+        #expect(SystemVolume.symbol(forName: "AirPods 4")?.name == "airpods.gen4")
+        #expect(SystemVolume.symbol(forName: "Living Room HomePod mini")?.personal == false)
+        #expect(SystemVolume.symbol(forName: "USB Audio Device") == nil)
+    }
+
     @Test func theCaseMatchesTheEarbuds() {
         #expect(AppleAudioModel.caseSymbol(for: "airpods.gen3") == "airpods.gen3.chargingcase.wireless")
         #expect(AppleAudioModel.caseSymbol(for: "airpods") == "airpods.chargingcase")
@@ -194,5 +202,15 @@ struct CapsuleClockTests {
         #expect(CapsuleClockMode.onTheMinute.showsClock(at: base.addingTimeInterval(3)))
         #expect(!CapsuleClockMode.onTheMinute.showsClock(at: base.addingTimeInterval(20)))
         #expect(!CapsuleClockMode.off.showsClock(at: base))
+    }
+
+    @Test func aLateTaskDoesntHoldBackTheTime() {
+        let calendar = Calendar.current
+        let base = calendar.date(bySettingHour: 10, minute: 0, second: 0, of: .now)!
+        #expect(CapsuleClockMode.onTheMinute.showsClock(at: base.addingTimeInterval(1), urgentTask: true))
+        // Always the clock, but a late task gets its turns.
+        let turns = (0..<15).map { CapsuleClockMode.always.showsClock(at: base.addingTimeInterval(Double($0)), urgentTask: true) }
+        #expect(turns.contains(true) && turns.contains(false))
+        #expect(CapsuleClockMode.always.showsClock(at: base, urgentTask: false))
     }
 }
