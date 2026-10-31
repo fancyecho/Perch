@@ -117,7 +117,7 @@ private struct DeviceWings: View {
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(.green)
             } else {
-                BatteryReadout(battery: battery)
+                BatteryReadout(battery: battery, caseSymbol: AppleAudioModel.caseSymbol(for: device.symbol))
             }
         }
     }
@@ -125,6 +125,7 @@ private struct DeviceWings: View {
 
 struct BatteryReadout: View {
     let battery: BluetoothBattery
+    var caseSymbol = "airpods.chargingcase"
 
     var body: some View {
         HStack(spacing: 8) {
@@ -136,7 +137,7 @@ struct BatteryReadout: View {
             }
             if let caseLevel = battery.caseLevel {
                 HStack(spacing: 3) {
-                    Image(systemName: "airpods.chargingcase")
+                    Image(systemName: caseSymbol)
                         .font(.system(size: 11))
                         .foregroundStyle(.white.opacity(0.6))
                     Text("\(caseLevel)%")

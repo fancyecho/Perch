@@ -154,3 +154,16 @@ struct StatusFormatTests {
         #expect(Fmt.bytesParts(265_000_000_000) == ("265", "GB"))
     }
 }
+
+struct AppleAudioModelTests {
+    @Test func airPodsGenerationsGetTheirOwnSymbols() {
+        #expect(AppleAudioModel.symbol(for: 0x2013) == "airpods.gen3")
+        #expect(AppleAudioModel.symbol(for: 0x2014) == "airpods.pro")
+        #expect(AppleAudioModel.symbol(for: 0x1234) == nil)
+    }
+
+    @Test func theCaseMatchesTheEarbuds() {
+        #expect(AppleAudioModel.caseSymbol(for: "airpods.gen3") == "airpods.gen3.chargingcase.wireless")
+        #expect(AppleAudioModel.caseSymbol(for: "airpods") == "airpods.chargingcase")
+    }
+}

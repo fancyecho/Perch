@@ -33,8 +33,9 @@ struct ExpandedIslandView: View {
                     } else {
                         pageContent(page, now: now, hasMedia: hasMedia, showsTasks: showsTasks)
                             .id(page)
-                            // The content follows the fingers: down to the next page, up to the one before.
-                            .transition(.push(from: model.pageMovesForward ? .top : .bottom))
+                            // The pages stack like the dots: the status page sits below, so it comes up
+                            // from the bottom, and going back the player comes down from the top.
+                            .transition(.push(from: model.pageMovesForward ? .bottom : .top))
                     }
                 }
                 .padding(.horizontal, 18)

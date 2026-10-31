@@ -82,7 +82,10 @@ nonisolated enum PeripheralSampler {
                         return .init(part: part, percent: percent)
                     }
                     guard !levels.isEmpty else { continue }
-                    devices.append(PeripheralBattery(name: name, symbol: symbol(name: name, type: info["device_minorType"] as? String),
+                    let product = (info["device_vendorID"] as? String)?.lowercased() == "0x004c"
+                        ? (info["device_productID"] as? String).flatMap { Int($0.dropFirst(2), radix: 16) } : nil
+                    devices.append(PeripheralBattery(name: name,
+                                                     symbol: product.flatMap(AppleAudioModel.symbol(for:)) ?? symbol(name: name, type: info["device_minorType"] as? String),
                                                      levels: levels))
                 }
             }

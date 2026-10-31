@@ -216,12 +216,6 @@ final class BluetoothMonitor: NSObject {
         return nil
     }
 
-    nonisolated private static let appleProducts: [Int: String] = [
-        0x2002: "airpods", 0x200F: "airpods", 0x2013: "airpods.gen3", 0x2019: "airpods.gen4", 0x201B: "airpods.gen4",
-        0x200E: "airpods.pro", 0x2014: "airpods.pro", 0x2024: "airpods.pro", 0x2027: "airpods.pro",
-        0x200A: "airpods.max", 0x201F: "airpods.max",
-        0x200B: "beats.powerbeats.pro", 0x2011: "beats.studiobuds", 0x2016: "beats.studiobuds", 0x2012: "beats.fitpro",
-    ]
 
     /// Address ("40-da-5c-…") → product ID of Apple devices, as system_profiler reports them.
     nonisolated private static let appleModels = Mutex<[String: Int]>([:])
@@ -260,11 +254,13 @@ final class BluetoothMonitor: NSObject {
     }
 
     nonisolated private static func symbol(for device: IOBluetoothDevice) -> String {
+        // system_profiler knows the model for sure; IOBluetooth's undocumented properties can report
+        // the generic AirPods for any of them.
+        if let address = device.addressString,
+           let product = appleModels.withLock({ $0[addressKey(address)] }), let symbol = AppleAudioModel.symbol(for: product) { return symbol }
         let vendor = (device.value(forKey: "vendorID") as? NSNumber)?.intValue
         let product = (device.value(forKey: "productID") as? NSNumber)?.intValue
-        if vendor == 0x004C, let product, let symbol = appleProducts[product] { return symbol }
-        if let address = device.addressString,
-           let product = appleModels.withLock({ $0[addressKey(address)] }), let symbol = appleProducts[product] { return symbol }
+        if vendor == 0x004C, let product, let symbol = AppleAudioModel.symbol(for: product) { return symbol }
 
         let name = (device.name ?? "").lowercased()
         if name.contains("airpods max") { return "airpods.max" }
@@ -286,6 +282,28 @@ final class BluetoothMonitor: NSObject {
             return "keyboard.fill"
         case 0x07: return "applewatch"
         default: return "wave.3.right"
+        }
+    }
+}
+
+/// Apple and Beats headphones by Bluetooth product ID, as SF Symbols draw them.
+nonisolated enum AppleAudioModel {
+    private static let symbols: [Int: String] = [
+        0x2002: "airpods", 0x200F: "airpods", 0x2013: "airpods.gen3", 0x2019: "airpods.gen4", 0x201B: "airpods.gen4",
+        0x200E: "airpods.pro", 0x2014: "airpods.pro", 0x2024: "airpods.pro", 0x2027: "airpods.pro",
+        0x200A: "airpods.max", 0x201F: "airpods.max",
+        0x200B: "beats.powerbeats.pro", 0x2011: "beats.studiobuds", 0x2016: "beats.studiobuds", 0x2012: "beats.fitpro",
+    ]
+
+    static func symbol(for product: Int) -> String? { symbols[product] }
+
+    /// The charging case that goes with the earbuds' symbol.
+    static func caseSymbol(for symbol: String) -> String {
+        switch symbol {
+        case "airpods.gen3": "airpods.gen3.chargingcase.wireless"
+        case "airpods.gen4": "airpods.gen4.chargingcase.wireless"
+        case "airpods.pro", "airpodspro": "airpods.pro.chargingcase.wireless"
+        default: "airpods.chargingcase"
         }
     }
 }
