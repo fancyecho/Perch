@@ -3,7 +3,7 @@ import SwiftUI
 import UserNotifications
 
 /// Status inside Perch: samples the Mac, hands its alerts to the island (or Notification Center
-/// without one), and draws the optional menu bar readout, which opens the dashboard beneath it.
+/// without one), and draws the optional menu bar readout, which opens the island's status page.
 @Observable
 final class StatusController {
     let prefs = StatusPreferences.shared
@@ -11,15 +11,13 @@ final class StatusController {
 
     /// Shows an alert on the island; false when there's no island to show it.
     @ObservationIgnored var onAlert: ((SystemAlert) -> Bool)?
-    @ObservationIgnored var onOpenSettings: (() -> Void)?
+    /// Opens the island on its status page, from the readout.
+    @ObservationIgnored var onOpenStatus: (() -> Void)?
 
     @ObservationIgnored private var statusItem: NSStatusItem?
-    @ObservationIgnored private var panel: StatusPanel?
     @ObservationIgnored private var appearanceObservation: NSKeyValueObservation?
     @ObservationIgnored private var lastIconKey: IconKey?
     @ObservationIgnored private var darkMenuBar = true
-    /// Who is showing the Mac's details right now (the island's status page, the panel).
-    @ObservationIgnored private var watchers: Set<String> = []
 
     init() {
         monitor = SystemMonitor(prefs: prefs)
@@ -30,21 +28,9 @@ final class StatusController {
         followReadout()
     }
 
-    /// Opens the dashboard under the readout, or under the menu bar's right end without one.
-    func showPanel() {
-        let panel = panel ?? makePanel()
-        if let button = statusItem?.button {
-            panel.toggle(below: button)
-        } else if let screen = NSScreen.main {
-            let corner = NSRect(x: screen.frame.maxX - 220, y: screen.visibleFrame.maxY, width: 1, height: 1)
-            panel.isShown ? panel.close() : panel.show(anchor: corner, on: screen)
-        }
-    }
-
-    /// Full sampling (processes, disk, Wi-Fi, latency) runs while anything shows it.
-    func watch(_ watcher: String, _ watching: Bool) {
-        if watching { watchers.insert(watcher) } else { watchers.remove(watcher) }
-        monitor.panelVisible = !watchers.isEmpty
+    /// The disk, Wi-Fi and latency are sampled while the island's status page shows them.
+    func watch(_ watching: Bool) {
+        monitor.isWatched = watching
     }
 
     // MARK: Alerts
@@ -128,40 +114,6 @@ final class StatusController {
     }
 
     @objc private func readoutClicked() {
-        showPanel()
-    }
-
-    private func makePanel() -> StatusPanel {
-        let panel = StatusPanel(rootView: StatusDashboard { [weak self] in
-            self?.panel?.close()
-            self?.onOpenSettings?()
-        }
-        .environment(monitor)
-        .environment(prefs)
-        .environment(AppSettings.shared))
-        panel.onVisibilityChange = { [weak self] visible in
-            guard let self else { return }
-            statusItem?.button?.highlight(visible)
-            if visible {
-                // Sample at full rate once the unfolding has mostly finished, so it doesn't stutter.
-                Task {
-                    try? await Task.sleep(for: .milliseconds(350))
-                    if self.panel?.isShown == true { self.watch("panel", true) }
-                }
-            } else {
-                watch("panel", false)
-                Task {
-                    try? await Task.sleep(for: .milliseconds(200))
-                    if self.panel?.isShown != true { self.prefs.page = .overview }
-                }
-            }
-        }
-        panel.onEscape = { [weak self] in
-            guard let self, prefs.page != .overview else { return false }
-            prefs.page = .overview
-            return true
-        }
-        self.panel = panel
-        return panel
+        onOpenStatus?()
     }
 }

@@ -555,41 +555,6 @@ enum SystemInfo {
         var size = MemoryLayout<Int32>.size
         return sysctlbyname(name, &value, &size, nil, 0) == 0 ? value : nil
     }
-
-    static func sysctlString(_ name: String) -> String? {
-        var size = 0
-        guard sysctlbyname(name, nil, &size, nil, 0) == 0, size > 0 else { return nil }
-        var buffer = [CChar](repeating: 0, count: size)
-        guard sysctlbyname(name, &buffer, &size, nil, 0) == 0 else { return nil }
-        return String(nulTerminated: buffer)
-    }
-
-    static let chip: String = {
-        let brand = sysctlString("machdep.cpu.brand_string") ?? "Mac"
-        return brand.replacingOccurrences(of: " (Virtual)", with: "")
-    }()
-
-    static let computerName: String = {
-        (SCDynamicStoreCopyComputerName(nil, nil) as String?) ?? "Mac"
-    }()
-
-    static let osVersion: String = {
-        let v = ProcessInfo.processInfo.operatingSystemVersion
-        return v.patchVersion > 0 ? "macOS \(v.majorVersion).\(v.minorVersion).\(v.patchVersion)" : "macOS \(v.majorVersion).\(v.minorVersion)"
-    }()
-
-    static var uptime: TimeInterval {
-        var boot = timeval()
-        var size = MemoryLayout<timeval>.size
-        var mib: [Int32] = [CTL_KERN, KERN_BOOTTIME]
-        guard sysctl(&mib, 2, &boot, &size, nil, 0) == 0 else { return ProcessInfo.processInfo.systemUptime }
-        return Date().timeIntervalSince1970 - Double(boot.tv_sec)
-    }
-
-    static var loadAverage: [Double] {
-        var loads = [Double](repeating: 0, count: 3)
-        return getloadavg(&loads, 3) == 3 ? loads : []
-    }
 }
 
 // MARK: - Temperature

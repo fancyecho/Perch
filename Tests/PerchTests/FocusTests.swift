@@ -204,6 +204,15 @@ struct CapsuleClockTests {
         #expect(!CapsuleClockMode.off.showsClock(at: base))
     }
 
+    @Test func theCapsuleRedrawsOnlyWhenTheClockChanges() {
+        let calendar = Calendar.current
+        let base = calendar.date(bySettingHour: 10, minute: 0, second: 30, of: .now)!
+        var entries = CapsuleClockSchedule(mode: .onTheMinute).entries(from: base, mode: .normal)
+        let seconds = (0..<4).compactMap { _ in entries.next() }.map { calendar.component(.second, from: $0) }
+        // Now, then the time coming in, the minute turning, and the task coming back.
+        #expect(seconds == [30, 57, 0, 5])
+    }
+
     @Test func aLateTaskDoesntHoldBackTheTime() {
         let calendar = Calendar.current
         let base = calendar.date(bySettingHour: 10, minute: 0, second: 0, of: .now)!

@@ -488,6 +488,7 @@ public final class LineController: NSObject {
         guard on != isRevealed else { return }
         isRevealed = on
         line.revealed = on
+        if mouseTimer != nil { startMouseTracking() }
         // It always comes down showing the newest.
         if on { line.scroll = 0 }
         // Tucked away, the line leaves no window behind: an invisible strip
@@ -533,11 +534,18 @@ public final class LineController: NSObject {
         }
     }
 
+    /// The pointer is checked 30 times a second while the line is down, to
+    /// follow it over the photos, and 8 times while it's tucked away, which is
+    /// plenty to notice it resting at the top (it takes a quarter second) and
+    /// keeps a line left hanging all day from waking the Mac for nothing.
     private func startMouseTracking() {
-        guard mouseTimer == nil else { return }
-        let timer = Timer(timeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
+        let interval = isRevealed ? 1.0 / 30.0 : 1.0 / 8.0
+        if let mouseTimer, mouseTimer.timeInterval == interval { return }
+        mouseTimer?.invalidate()
+        let timer = Timer(timeInterval: interval, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.tick() }
         }
+        timer.tolerance = interval * 0.2
         RunLoop.main.add(timer, forMode: .common)
         mouseTimer = timer
     }
@@ -565,17 +573,15 @@ public final class LineController: NSObject {
 
     /// The part of the menu bar that brings the line down: the middle third,
     /// so the menus on the left and the icons on the right stay easy to reach.
-    /// Where the island sits in the middle, the stretch either side of it: resting on the island
-    /// opens the island instead.
+    /// Where the island sits in the middle, the third without it: resting on
+    /// the island opens the island instead.
     private func revealBands(of screen: NSScreen) -> [NSRect] {
         let bar = menuBarBand(of: screen)
         let width = bar.width / 3
         let third = NSRect(x: bar.midX - width / 2, y: bar.minY, width: width, height: bar.height)
         guard let middle = middle(screen) else { return [third] }
-        let reach: CGFloat = 170
-        let leftEdge = min(third.minX, middle.lowerBound - reach), rightEdge = max(third.maxX, middle.upperBound + reach)
-        return [NSRect(x: leftEdge, y: bar.minY, width: middle.lowerBound - leftEdge, height: bar.height),
-                NSRect(x: middle.upperBound, y: bar.minY, width: rightEdge - middle.upperBound, height: bar.height)]
+        return [NSRect(x: third.minX, y: bar.minY, width: max(0, middle.lowerBound - third.minX), height: bar.height),
+                NSRect(x: middle.upperBound, y: bar.minY, width: max(0, third.maxX - middle.upperBound), height: bar.height)]
     }
 
     private func menuBarBand(of screen: NSScreen) -> NSRect { Self.menuBarBand(of: screen) }
@@ -612,11 +618,7 @@ public final class LineController: NSObject {
         let screenUnderPointer = NSScreen.screens.first { NSMouseInRect(mouse, $0.frame, false) }
         let inMenuBar = screenUnderPointer.map { NSMouseInRect(mouse, Self.menuBarBand(of: $0), false) } ?? false
         if !inMenuBar { menuBarSuppressed = false }
-        // Pushing against the top edge anywhere but the middle, where the island is.
-        let atTopEdge = screenUnderPointer.map { screen in
-            mouse.y >= screen.frame.maxY - 2 && !(middle(screen)?.contains(mouse.x) ?? false)
-        } ?? false
-        let inRevealBand = atTopEdge || screenUnderPointer.map { screen in
+        let inRevealBand = screenUnderPointer.map { screen in
             revealBands(of: screen).contains { NSMouseInRect(mouse, $0, false) }
         } ?? false
 
@@ -624,9 +626,9 @@ public final class LineController: NSObject {
             holdPutBackKey(false)
             holdPhotoKeys(over: nil)
             line.closeGaps()
-            // Resting in the menu bar beside the island, or pushing against
-            // the top edge anywhere but the middle, brings the line down on
-            // that screen. The edge also works when another display sits
+            // Resting in the middle third of the menu bar, beside the island,
+            // brings the line down on that screen. Pushing against the top
+            // edge is part of it, and it also works when another display sits
             // above and the pointer never stops.
             // An empty line stays up there: only the shortcut and the menu
             // bring it down on purpose.

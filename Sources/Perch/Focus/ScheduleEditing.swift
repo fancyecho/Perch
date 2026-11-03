@@ -2,95 +2,80 @@ import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// Which schedule the editor shows.
+/// Which schedule's editor is open, as a sheet over Settings › Focus.
 @Observable
 final class SchedulesRouter {
     static let shared = SchedulesRouter()
-    var selection: UUID?
-}
+    var editing: UUID?
+    /// Brings Settings forward on its Focus page (set by the app).
+    @ObservationIgnored var openSettings: () -> Void = {}
 
-/// The schedule editor: the schedules in a glass sidebar, the selected one on the right.
-final class SchedulesWindowController: NSObject, NSWindowDelegate {
-    static let shared = SchedulesWindowController()
-    private var window: NSWindow?
-
-    /// Opens the editor on a schedule, or on a new one.
-    func show(selecting id: UUID? = nil, creating: Bool = false) {
+    /// Opens a schedule's editor in Settings › Focus, or a new schedule's.
+    func edit(_ id: UUID? = nil, creating: Bool = false, preset: SchedulePreset? = nil) {
         let store = ScheduleStore.shared
         if creating {
-            let rule = store.newRule()
+            let rule = preset.map { store.newRule(name: $0.name, start: $0.start, end: $0.end, weekdays: $0.days) } ?? store.newRule()
             store.rules.append(rule)
-            SchedulesRouter.shared.selection = rule.id
-        } else if let id {
-            SchedulesRouter.shared.selection = id
+            editing = rule.id
+        } else {
+            editing = id
         }
-        NSApp.activate()
-        if let window {
-            window.makeKeyAndOrderFront(nil)
-            return
-        }
-        let hosting = NSHostingController(rootView: SchedulesView(store: store)
-            .environment(AppSettings.shared)
-            .environment(BrowserAccess.shared))
-        hosting.sizingOptions = []
-        let window = NSWindow(contentViewController: hosting)
-        window.styleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
-        window.title = tr("时段", "Schedules")
-        window.titlebarAppearsTransparent = true
-        window.toolbarStyle = .unified
-        window.setContentSize(NSSize(width: 920, height: 660))
-        window.minSize = NSSize(width: 800, height: 560)
-        window.isReleasedWhenClosed = false
-        window.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
-        window.delegate = self
-        window.center()
-        window.makeKeyAndOrderFront(nil)
-        self.window = window
-        // Don't land in the name field the moment it opens.
-        Task {
-            try? await Task.sleep(for: .milliseconds(50))
-            window.makeFirstResponder(nil)
-        }
-    }
-
-    func windowWillClose(_ notification: Notification) {
-        window = nil
+        openSettings()
     }
 }
 
-// MARK: - Layout
+/// A ready-made schedule to start from.
+struct SchedulePreset: Identifiable {
+    let name: String
+    let detail: String
+    let start: Int
+    let end: Int
+    let days: Set<Int>
+    var id: String { name }
 
-struct SchedulesView: View {
+    static var all: [SchedulePreset] {
+        [
+            SchedulePreset(name: tr("晚自习", "Evening Study"), detail: tr("每天 19:00–22:00", "Daily 19:00–22:00"), start: 19 * 60, end: 22 * 60, days: Set(1...7)),
+            SchedulePreset(name: tr("上午刷题", "Morning Practice"), detail: tr("工作日 08:30–11:30", "Weekdays 08:30–11:30"), start: 8 * 60 + 30, end: 11 * 60 + 30, days: [2, 3, 4, 5, 6]),
+            SchedulePreset(name: tr("睡前远离屏幕", "Screens Off at Night"), detail: tr("每天 23:00–次日 07:00", "Daily 23:00–07:00"), start: 23 * 60, end: 7 * 60, days: Set(1...7)),
+        ]
+    }
+}
+
+/// One schedule's editor, as a sheet over Settings, with Done at the top.
+struct ScheduleSheet: View {
+    let id: UUID
     @Bindable var store: ScheduleStore
-    @Bindable var router = SchedulesRouter.shared
+    let onClose: () -> Void
 
     var body: some View {
-        NavigationSplitView {
-            ScheduleSidebar(store: store, selection: $router.selection)
-                .navigationSplitViewColumnWidth(min: 250, ideal: 280, max: 340)
-        } detail: {
-            Group {
-                if let id = router.selection, store.rules.contains(where: { $0.id == id }) {
-                    RuleEditor(rule: binding(for: id), store: store) {
-                        withAnimation(.smooth) {
-                            store.rules.removeAll { $0.id == id }
-                            router.selection = store.rules.first?.id
-                        }
-                    }
-                    .id(id)
-                    .transition(.opacity)
-                } else {
-                    EmptySchedules(store: store, selection: $router.selection)
-                }
+        VStack(spacing: 0) {
+            HStack {
+                Spacer()
+                Button(tr("完成", "Done"), action: onClose)
+                    .keyboardShortcut(.defaultAction)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .padding(.horizontal, 16)
+            .padding(.top, 14)
+            if store.rules.contains(where: { $0.id == id }) {
+                RuleEditor(rule: binding, store: store) {
+                    store.rules.removeAll { $0.id == id }
+                    onClose()
+                }
+            } else {
+                Spacer()
+            }
         }
-        .onAppear { router.selection = router.selection ?? store.rules.first?.id }
-        .animation(.smooth(duration: 0.3), value: router.selection)
+        .frame(width: 600, height: 660)
+        // Don't land in the address field the moment it opens.
+        .task {
+            try? await Task.sleep(for: .milliseconds(50))
+            NSApp.keyWindow?.makeFirstResponder(nil)
+        }
     }
 
     /// By id, not index: deleting another schedule shifts the indexes.
-    private func binding(for id: UUID) -> Binding<BlockRule> {
+    private var binding: Binding<BlockRule> {
         Binding(
             get: { store.rules.first { $0.id == id } ?? store.newRule() },
             set: { updated in
@@ -99,127 +84,9 @@ struct SchedulesView: View {
     }
 }
 
-// MARK: - Sidebar
-
-private struct ScheduleSidebar: View {
-    @Bindable var store: ScheduleStore
-    @Binding var selection: UUID?
-    @Environment(AppSettings.self) private var settings
-
-    var body: some View {
-        TimelineView(.periodic(from: .now, by: 30)) { context in
-            List(selection: $selection) {
-                Section {
-                    ForEach(store.rules) { rule in
-                        RuleRow(rule: rule, now: context.date, locked: store.isLocked(rule, at: context.date),
-                                isEnabled: enabledBinding(rule.id))
-                            .tag(rule.id)
-                    }
-                } header: {
-                    Text(tr("在固定的时间，让分心的 App 和网站暂停", "Pause distracting apps and sites at set times"))
-                        .font(.system(size: 11))
-                        .textCase(nil)
-                        .padding(.bottom, 4)
-                }
-            }
-            .listStyle(.sidebar)
-        }
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            VStack(alignment: .leading, spacing: 10) {
-                Button(action: addRule) {
-                    Label(tr("新建时段", "New Schedule"), systemImage: "plus")
-                        .font(.system(size: 13, weight: .semibold))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 8)
-                        .contentShape(.capsule)
-                }
-                .buttonStyle(.glass)
-                .keyboardShortcut("n", modifiers: .command)
-                .help(tr("新建时段（⌘N）", "New schedule (⌘N)"))
-
-                // Every schedule keeps the app's clock; say which, since it may not be this Mac's.
-                Label(zoneLine, systemImage: "globe")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .help(tr("在 设置 › 专注 中更改时区，待办和时段共用它", "Change it in Settings › Focus; tasks and schedules share it"))
-            }
-            .padding(14)
-        }
-    }
-
-    private var zoneLine: String {
-        let zone = settings.timeZone
-        return tr("按 \(ZoneCatalog.title(for: zone)) 时间 · \(TimeZoneText.offset(zone))",
-                  "On \(ZoneCatalog.title(for: zone)) time · \(TimeZoneText.offset(zone))")
-    }
-
-    private func addRule() {
-        let rule = store.newRule()
-        withAnimation(.smooth) { store.rules.append(rule) }
-        selection = rule.id
-    }
-
-    private func enabledBinding(_ id: UUID) -> Binding<Bool> {
-        Binding(
-            get: { store.rules.first { $0.id == id }?.isEnabled ?? false },
-            set: { value in
-                if let index = store.rules.firstIndex(where: { $0.id == id }) { store.rules[index].isEnabled = value }
-            })
-    }
-}
-
-private struct RuleRow: View {
-    let rule: BlockRule
-    let now: Date
-    let locked: Bool
-    @Binding var isEnabled: Bool
-
-    var body: some View {
-        let active = rule.activeOccurrence(at: now) != nil
-        HStack(alignment: .center, spacing: 11) {
-            Circle()
-                .fill(RuleTint.gradient(rule.tint))
-                .frame(width: 10, height: 10)
-                .shadow(color: active ? RuleTint.color(rule.tint) : .clear, radius: 5)
-                .opacity(rule.isEnabled ? 1 : 0.35)
-
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 6) {
-                    Text(rule.name.isEmpty ? tr("未命名", "Untitled") : rule.name)
-                        .font(.system(size: 13, weight: .semibold))
-                        .lineLimit(1)
-                    if active { StatusPill(text: tr("进行中", "Now"), tint: rule.tint) }
-                    if locked {
-                        Image(systemName: "lock.fill").font(.system(size: 9)).foregroundStyle(.secondary)
-                    }
-                }
-                Text(ScheduleText.summary(rule))
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                if !rule.hasNoTargets {
-                    TargetStack(rule: rule, size: 16)
-                }
-            }
-            .opacity(rule.isEnabled ? 1 : 0.5)
-
-            Spacer(minLength: 4)
-
-            Toggle(tr("启用", "On"), isOn: $isEnabled)
-                .labelsHidden()
-                .toggleStyle(.switch)
-                .controlSize(.mini)
-                .disabled(locked)
-        }
-        .padding(.vertical, 6)
-        .accessibilityElement(children: .combine)
-    }
-}
-
 // MARK: - Editor
 
-private struct RuleEditor: View {
+struct RuleEditor: View {
     @Binding var rule: BlockRule
     let store: ScheduleStore
     let onDelete: () -> Void
@@ -262,9 +129,9 @@ private struct RuleEditor: View {
                     .disabled(locked)
                     .opacity(locked ? 0.55 : 1)
                 }
-                .padding(.horizontal, 36)
-                .padding(.top, 24)
-                .padding(.bottom, 36)
+                .padding(.horizontal, 32)
+                .padding(.top, 4)
+                .padding(.bottom, 32)
                 .frame(maxWidth: 680, alignment: .leading)
                 .frame(maxWidth: .infinity)
                 .environment(\.cardTint, rule.tint)
@@ -1344,77 +1211,6 @@ private struct ModeCard: View {
         .onTapGesture { withAnimation(.snappy(duration: 0.2)) { isStrict = strict } }
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(selected ? [.isSelected, .isButton] : .isButton)
-    }
-}
-
-// MARK: - Empty
-
-private struct EmptySchedules: View {
-    let store: ScheduleStore
-    @Binding var selection: UUID?
-
-    private var presets: [(name: String, detail: String, start: Int, end: Int, days: Set<Int>)] {
-        [
-            (tr("晚自习", "Evening Study"), tr("每天 19:00–22:00", "Daily 19:00–22:00"), 19 * 60, 22 * 60, Set(1...7)),
-            (tr("上午刷题", "Morning Practice"), tr("工作日 08:30–11:30", "Weekdays 08:30–11:30"), 8 * 60 + 30, 11 * 60 + 30, [2, 3, 4, 5, 6]),
-            (tr("睡前远离屏幕", "Screens Off at Night"), tr("每天 23:00–次日 07:00", "Daily 23:00–07:00"), 23 * 60, 7 * 60, Set(1...7)),
-        ]
-    }
-
-    var body: some View {
-        VStack(spacing: 0) {
-            Image(systemName: "lamp.desk.fill")
-                .font(.system(size: 46, weight: .regular))
-                .foregroundStyle(Brand.gradient)
-                .frame(width: 92, height: 92)
-                .glassEffect(.regular, in: .circle)
-                .padding(.bottom, 22)
-            Text(tr("还没有时段", "No Schedules Yet"))
-                .font(.system(size: 22, weight: .bold))
-                .padding(.bottom, 8)
-            Text(tr("在固定的时间，让微信、视频这些容易分心的 App 暂停。\n到点自动开始，到点自动结束。",
-                    "Pause chat, video and other distractions at set times.\nThey start and end on their own."))
-                .font(.system(size: 13))
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .lineSpacing(3)
-                .padding(.bottom, 28)
-
-            VStack(spacing: 8) {
-                ForEach(Array(presets.enumerated()), id: \.offset) { index, preset in
-                    Button {
-                        add(name: preset.name, start: preset.start, end: preset.end, days: preset.days)
-                    } label: {
-                        HStack(spacing: 12) {
-                            Circle().fill(RuleTint.gradient(index)).frame(width: 10, height: 10)
-                            Text(preset.name).font(.system(size: 13, weight: .semibold))
-                            Spacer()
-                            Text(preset.detail).font(.system(size: 12)).foregroundStyle(.secondary)
-                            Image(systemName: "plus.circle.fill").foregroundStyle(RuleTint.color(index))
-                        }
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 12)
-                        .frame(width: 380)
-                        .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                        .contentShape(RoundedRectangle(cornerRadius: 12))
-                    }
-                    .buttonStyle(SoftPressStyle())
-                }
-            }
-            .padding(.bottom, 16)
-
-            Button(tr("从空白开始", "Start from Scratch")) { add(name: nil, start: 19 * 60, end: 22 * 60, days: Set(1...7)) }
-                .buttonStyle(.plain)
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(.secondary)
-        }
-        .padding(40)
-    }
-
-    private func add(name: String?, start: Int, end: Int, days: Set<Int>) {
-        let rule = store.newRule(name: name, start: start, end: end, weekdays: days)
-        withAnimation(.smooth) { store.rules.append(rule) }
-        selection = rule.id
     }
 }
 

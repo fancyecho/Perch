@@ -41,7 +41,7 @@ struct FocusPage: View {
                         }
                         Spacer()
                         IconButton(symbol: "plus", help: tr("新建时段", "New schedule")) {
-                            SchedulesWindowController.shared.show(creating: true)
+                            SchedulesRouter.shared.edit(creating: true)
                         }
                     }
                     if schedules.rules.isEmpty {
@@ -250,7 +250,7 @@ private struct PanelScheduleRow: View {
         .background(Color.primary.opacity(hovering ? 0.07 : 0.04), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         .contentShape(.rect(cornerRadius: 12))
         .onHover { hovering = $0 }
-        .onTapGesture { SchedulesWindowController.shared.show(selecting: rule.id) }
+        .onTapGesture { SchedulesRouter.shared.edit(rule.id) }
         .animation(.easeOut(duration: 0.15), value: hovering)
         .help(tr("点击编辑", "Click to edit"))
     }
@@ -276,7 +276,7 @@ private struct EmptySchedulesRow: View {
                 .font(.system(size: 11.5))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            Button(tr("新建时段…", "New Schedule…")) { SchedulesWindowController.shared.show(creating: true) }
+            Button(tr("新建时段…", "New Schedule…")) { SchedulesRouter.shared.edit(creating: true) }
                 .controlSize(.small)
         }
         .padding(12)

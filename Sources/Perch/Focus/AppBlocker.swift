@@ -104,7 +104,7 @@ final class AppBlocker: NSObject {
         NotificationCenter.default.addObserver(self, selector: #selector(evaluate), name: .NSSystemClockDidChange, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(evaluate), name: .NSSystemTimeZoneDidChange, object: nil)
         timer = Timer.scheduledTimer(timeInterval: 5, target: self, selector: #selector(evaluate), userInfo: nil, repeats: true)
-        webTimer = Timer.scheduledTimer(timeInterval: Self.webInterval, target: self, selector: #selector(checkBrowser), userInfo: nil, repeats: true)
+        timer?.tolerance = 1
 
         shield.onBack = { [weak self] in self?.backToWork() }
         shield.onPass = { [weak self] target, rule in self?.grantPass(to: target, rule: rule) }
@@ -135,6 +135,20 @@ final class AppBlocker: NSObject {
         sweepBackgroundApps()
         sweepStrictTabs()
         if let front = NSWorkspace.shared.frontmostApplication { check(front) }
+        updateWebTimer()
+    }
+
+    /// The browser's address is only worth reading while a schedule pauses sites; the rest of the
+    /// time nothing wakes up for it.
+    private func updateWebTimer() {
+        let needed = !store.activeSiteOccurrences().isEmpty
+        if needed, webTimer == nil {
+            webTimer = Timer.scheduledTimer(timeInterval: Self.webInterval, target: self, selector: #selector(checkBrowser), userInfo: nil, repeats: true)
+            webTimer?.tolerance = 0.2
+        } else if !needed, let webTimer {
+            webTimer.invalidate()
+            self.webTimer = nil
+        }
     }
 
     private func isStillBlocked(_ target: BlockTarget) -> Bool {

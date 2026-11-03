@@ -8,7 +8,7 @@ struct FocusMenuItems: View {
     var body: some View {
         Button(tr("开始专注", "Start Focus")) { focus.startSession(fromMenu: true) }
             .keyboardShortcut("f", modifiers: [.command, .option])
-        Button(tr("时段…", "Schedules…")) { SchedulesWindowController.shared.show() }
+        Button(tr("时段…", "Schedules…")) { SchedulesRouter.shared.edit() }
     }
 }
 

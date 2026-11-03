@@ -37,7 +37,6 @@ enum Pref {
     static let clockEmphasizesTime = "clock.emphasizesTime"
     static let clockRollsDigits = "clock.rollsDigits"
     /// "system", "zh" or "en": the time can read in English while the rest is Chinese.
-    static let clockLanguage = "clock.language"
 
     static func register() {
         UserDefaults.standard.register(defaults: [
@@ -69,7 +68,6 @@ enum Pref {
             clockWideTracking: true,
             clockEmphasizesTime: false,
             clockRollsDigits: true,
-            clockLanguage: "system",
         ])
     }
 }

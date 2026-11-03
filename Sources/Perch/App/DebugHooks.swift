@@ -19,7 +19,6 @@ extension AppDelegate {
         case "collapse": island?.collapse()
         case "status": island?.openStatus()
         case "close": island?.closeTaskList()
-        case "panel": status.showPanel()
         case "line": line?.toggleLine()
         case "hang":
             // hang:<folder>: everything in it, as new captures.
@@ -44,7 +43,7 @@ extension AppDelegate {
             island?.model.metricHandler?(metric)
         case "focus": focus.startSession()
         case "unlock": focus.debugUnlock()
-        case "schedules": SchedulesWindowController.shared.show()
+        case "schedules": SchedulesRouter.shared.edit(ScheduleStore.shared.rules.first?.id)
         case "settings":
             let tab = parts.dropFirst().first.flatMap { name in SettingsTab.allCases.first { "\($0)" == name } } ?? .general
             showSettings(tab)

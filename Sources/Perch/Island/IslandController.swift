@@ -229,7 +229,7 @@ final class IslandController {
         media.stop()
         bluetooth.stop()
         power.stop()
-        status.watch("island", false)
+        status.watch(false)
         notchSpace?.remove(panel)
         notchSpace = nil
         panel.orderOut(nil)
@@ -278,7 +278,7 @@ final class IslandController {
 
     /// Processes, disk, Wi-Fi and latency are only sampled while the status page is on screen.
     private func updateStatusWatch() {
-        status.watch("island", model.isExpanded && model.page == .status && focus.passes.isEmpty)
+        status.watch(model.isExpanded && model.page == .status && focus.passes.isEmpty)
     }
 
     func collapse() {
@@ -375,12 +375,11 @@ final class IslandController {
 
     // MARK: - Status
 
-    /// Opens the island on its status page, with one of the details showing. When the island has
-    /// no status page (its gauges are off), the full panel opens under the menu bar instead.
+    /// Opens the island on its status page, with one of the details showing.
     func openStatus(_ metric: StatusMetric? = nil) {
         guard !model.isLocked, !model.isCurtained else { return }
         if let metric { model.statusMetric = metric }
-        guard islandPages.contains(.status) else { return status.showPanel() }
+        guard islandPages.contains(.status) else { return }
         if model.isExpanded {
             showPage(.status)
         } else {
@@ -407,7 +406,7 @@ final class IslandController {
         case .runaway(let pid): NSRunningApplication(processIdentifier: pid)?.terminate()
         case .hot: openStatus(.temperature)
         case .memory: openStatus(.memory)
-        case .disk: status.showPanel()
+        case .disk: openStatus()
         case .battery: openStatus()
         }
     }

@@ -82,12 +82,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         focus.start()
 
         status.onAlert = { [weak self] alert in self?.island?.showAlert(alert) ?? false }
-        status.onOpenSettings = { [weak self] in self?.showSettings(.status) }
+        status.onOpenStatus = { [weak self] in self?.island?.openStatus() }
         status.start()
 
         applyIslandPreference()
         LineLanguage.isChinese = { AppSettings.shared.isChinese }
         LineHost.controller = { [weak self] in self?.line }
+        SchedulesRouter.shared.openSettings = { [weak self] in self?.showSettings(.focus) }
         applyLinePreference()
         defaultsObserver = NotificationCenter.default.addObserver(
             forName: UserDefaults.didChangeNotification, object: nil, queue: .main

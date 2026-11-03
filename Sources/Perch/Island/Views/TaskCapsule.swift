@@ -63,11 +63,12 @@ private struct CapsuleContent: View {
     @AppStorage(Pref.clockMode) private var clockMode = CapsuleClockMode.onTheMinute.rawValue
 
     var body: some View {
-        // The time taking turns with the task needs the seconds; otherwise minutes will do.
-        if clockMode == CapsuleClockMode.off.rawValue {
+        // Redrawn when the time comes or goes and each minute; never every second.
+        let mode = CapsuleClockMode(rawValue: clockMode) ?? .onTheMinute
+        if mode == .off {
             TimelineView(.everyMinute) { context in content(context.date) }
         } else {
-            TimelineView(.periodic(from: .now, by: 1)) { context in content(context.date) }
+            TimelineView(CapsuleClockSchedule(mode: mode)) { context in content(context.date) }
         }
     }
 

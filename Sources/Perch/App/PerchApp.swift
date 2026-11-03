@@ -28,7 +28,6 @@ private struct MenuBarContent: View {
         Toggle(tr("刘海灵动岛", "Notch Island"), isOn: $islandEnabled)
         Divider()
         FocusMenuItems()
-        Button(tr("系统状态面板", "System Status Panel")) { app.status.showPanel() }
         if let line = app.line {
             Menu(tr("晾衣绳", "Line")) {
                 Button(tr("显示 / 隐藏", "Show / Hide")) { line.toggleLine() }

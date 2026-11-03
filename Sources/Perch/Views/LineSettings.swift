@@ -59,9 +59,9 @@ struct LinePane: View {
 
                 Section(tr("放下晾衣绳", "Bring the line down")) {
                     Toggle(isOn: staticBinding(get: { LineController.opensFromMenuBar }, set: { LineController.opensFromMenuBar = $0 })) {
-                        SettingLabel(tr("指针顶到屏幕上沿时", "When the pointer reaches the top edge"),
-                                     tr("屏幕顶部正中留给灵动岛和胶囊，在其他位置把指针移到最上方并稍停，或停在灵动岛两侧的菜单栏。",
-                                        "The middle of the top belongs to the island and the capsule: push against the top edge anywhere else, or rest beside the island in the menu bar."))
+                        SettingLabel(tr("指针停在菜单栏中间时", "When the pointer rests in the middle of the menu bar"),
+                                     tr("菜单栏中间三分之一，灵动岛两侧；停在灵动岛上会展开灵动岛。快捷键在「通用」里。",
+                                        "The middle third, either side of the island; resting on the island opens the island. The shortcut is in General."))
                     }
                     Toggle(tr("有新截图挂上时", "When something new hangs"),
                            isOn: staticBinding(get: { LineController.peeksAtNew }, set: { LineController.peeksAtNew = $0 }))
@@ -69,14 +69,6 @@ struct LinePane: View {
                         SettingLabel(tr("在全屏 App 上", "Over full screen apps"),
                                      tr("关掉后，全屏看视频、放幻灯片时晾衣绳不会自己放下，只能用快捷键或菜单打开。",
                                         "Off, the line stays up over full screen videos and presentations, unless opened with the shortcut or the menu."))
-                    }
-                    LabeledContent(tr("快捷键", "Shortcut")) {
-                        HStack(spacing: 8) {
-                            Text(line.shortcutText)
-                                .monospaced()
-                                .foregroundStyle(.secondary)
-                            Button(tr("更改…", "Change…")) { line.recordShortcut() }
-                        }
                     }
                 }
 

@@ -71,6 +71,7 @@ final class FocusController {
         idleTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.checkIdle() }
         }
+        idleTimer?.tolerance = 1
         focusTimer = Timer.scheduledTimer(withTimeInterval: Self.accountingInterval, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.accountFocus() }
         }

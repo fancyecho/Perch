@@ -1,36 +1,21 @@
 import SwiftUI
 
-/// Settings › Focus: how today went, the focus screen, the schedules, the time zone they run on,
-/// and keeping Perch alive for strict schedules.
+/// Settings › Focus: how today went, the focus screen, and the schedules, each edited in a sheet
+/// right here. The time zone and keeping Perch alive are in General.
 struct FocusPane: View {
     @Environment(FocusController.self) private var focus
     @Bindable private var store = FocusStore.shared
     @Bindable private var schedules = ScheduleStore.shared
+    @Bindable private var router = SchedulesRouter.shared
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 30)) { context in
-            let strictActive = schedules.hasStrictRuleActive
             Form {
                 Section {
                     FocusOverview(store: store) { focus.startSession() }
                 }
 
                 Section(tr("专注画面", "Focus Screen")) {
-                    LabeledContent(tr("开始专注 · 长按解除", "Start · hold to unlock")) {
-                        HStack(spacing: 8) {
-                            if focus.hotKeyStatus == .unavailable {
-                                Label(tr("已被其他应用占用", "Taken by another app"), systemImage: "exclamationmark.triangle.fill")
-                                    .font(.caption)
-                                    .foregroundStyle(.orange)
-                                    .help(tr("如果旧的 Focus 还在运行，退出它即可", "If the old Focus app is still running, quit it"))
-                            }
-                            Text(focus.shortcutText)
-                                .font(.system(size: 12, weight: .semibold).monospaced())
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 3)
-                                .background(Color.primary.opacity(0.07), in: RoundedRectangle(cornerRadius: 6))
-                        }
-                    }
                     Picker(selection: $store.idleMinutes) {
                         ForEach(FocusStore.idleOptions, id: \.self) { minutes in
                             Text(minutes == 0 ? tr("关闭", "Off") : tr("\(minutes) 分钟", "\(minutes) min")).tag(minutes)
@@ -62,13 +47,14 @@ struct FocusPane: View {
                         ScheduleSettingsRow(rule: rule, now: context.date, locked: schedules.isLocked(rule, at: context.date),
                                             isEnabled: enabledBinding(rule.id))
                     }
-                    HStack {
-                        Button(tr("新建时段…", "New Schedule…")) { SchedulesWindowController.shared.show(creating: true) }
-                        Spacer()
-                        if !schedules.rules.isEmpty {
-                            Button(tr("编辑时段…", "Edit Schedules…")) { SchedulesWindowController.shared.show() }
+                    Menu(tr("新建时段", "New Schedule")) {
+                        ForEach(SchedulePreset.all) { preset in
+                            Button("\(preset.name)　\(preset.detail)") { router.edit(creating: true, preset: preset) }
                         }
+                        Divider()
+                        Button(tr("从空白开始", "Start from Scratch")) { router.edit(creating: true) }
                     }
+                    .fixedSize()
                 } header: {
                     Text(tr("时段", "Schedules"))
                 } footer: {
@@ -78,45 +64,15 @@ struct FocusPane: View {
                     }
                 }
 
-                Section {
-                    TimeZoneRow()
-                        .disabled(strictActive)
-                } header: {
-                    Text(tr("时区", "Time Zone"))
-                } footer: {
-                    Text(strictActive
-                         ? tr("严格时段进行中，暂时不能改时区", "A strict schedule is running; the time zone can't change until it ends")
-                         : tr("时段按这个时区的钟表时间生效，和待办共用", "Schedules run on this zone's clock, the same one your tasks use"))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-
-                Section(tr("启动与守护", "Launch & Keep Alive")) {
-                    Toggle(isOn: $store.keepAlive) {
-                        SettingLabel(tr("防止被强行退出", "Keep Perch alive"),
-                                     strictActive && store.keepAlive
-                                        ? tr("严格时段进行中，暂时不能关闭", "Can't turn off while a strict schedule runs")
-                                        : tr("被活动监视器、强制退出结束后，几秒内自动重新打开，并在登录时启动。严格时段建议打开",
-                                             "Reopens within seconds if Activity Monitor or Force Quit ends it, and starts at login. Recommended with strict schedules"))
-                    }
-                    .disabled(strictActive && store.keepAlive)
-                    if store.keepAliveNeedsApproval {
-                        LabeledContent {
-                            Button(tr("去设置", "Open Settings")) { BackgroundAgent.openLoginItemsSettings() }
-                        } label: {
-                            Label(tr("还需要在「系统设置 › 通用 › 登录项」里允许 Perch 在后台运行",
-                                     "Allow Perch in the background in System Settings › General › Login Items"),
-                                  systemImage: "exclamationmark.triangle.fill")
-                                .foregroundStyle(.orange)
-                        }
-                    }
-                }
             }
         }
-        .onAppear {
-            store.refreshBackgroundStatus()
-            BrowserAccess.shared.refreshAll()
+        .sheet(isPresented: Binding(get: { router.editing != nil }, set: { if !$0 { router.editing = nil } })) {
+            if let id = router.editing {
+                ScheduleSheet(id: id, store: schedules) { router.editing = nil }
+                    .environment(BrowserAccess.shared)
+            }
         }
+        .onAppear { BrowserAccess.shared.refreshAll() }
     }
 
     private func enabledBinding(_ id: UUID) -> Binding<Bool> {
@@ -280,7 +236,7 @@ private struct ScheduleSettingsRow: View {
                 TargetStack(rule: rule, size: 18, limit: 3)
             }
             Button {
-                SchedulesWindowController.shared.show(selecting: rule.id)
+                SchedulesRouter.shared.edit(rule.id)
             } label: {
                 Image(systemName: "slider.horizontal.3")
             }
@@ -293,6 +249,6 @@ private struct ScheduleSettingsRow: View {
                 .disabled(locked)
         }
         .contentShape(.rect)
-        .onTapGesture(count: 2) { SchedulesWindowController.shared.show(selecting: rule.id) }
+        .onTapGesture(count: 2) { SchedulesRouter.shared.edit(rule.id) }
     }
 }

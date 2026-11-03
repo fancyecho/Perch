@@ -33,6 +33,30 @@ enum CapsuleClockMode: String, CaseIterable {
     }
 }
 
+/// When the capsule redraws for its clock: the moments the time comes and goes, and each new
+/// minute, rather than every second (three times a minute for "as the minute turns").
+struct CapsuleClockSchedule: TimelineSchedule {
+    let mode: CapsuleClockMode
+
+    func entries(from startDate: Date, mode _: TimelineScheduleMode) -> AnyIterator<Date> {
+        // Always the clock still takes turns with a late task, so it follows the alternating rhythm.
+        let rhythm = mode == .always ? CapsuleClockMode.alternate : mode
+        var next: Date? = startDate
+        return AnyIterator {
+            guard let current = next else { return nil }
+            var t = current.timeIntervalSinceReferenceDate.rounded(.down) + 1
+            for _ in 0...60 {
+                let date = Date(timeIntervalSinceReferenceDate: t)
+                let changes = rhythm.showsClock(at: date) != rhythm.showsClock(at: date.addingTimeInterval(-1))
+                if changes || Calendar.current.component(.second, from: date) == 0 { break }
+                t += 1
+            }
+            next = Date(timeIntervalSinceReferenceDate: t)
+            return current
+        }
+    }
+}
+
 /// Dayline's line of time: the date and weekday, then the time, in the app's time zone.
 struct ClockLineStyle: Equatable {
     var showsDate = true
@@ -85,12 +109,11 @@ struct ClockLine: View {
     @AppStorage(Pref.clockWideTracking) private var wideTracking = true
     @AppStorage(Pref.clockEmphasizesTime) private var emphasizesTime = false
     @AppStorage(Pref.clockRollsDigits) private var rollsDigits = true
-    @AppStorage(Pref.clockLanguage) private var language = "system"
 
     var body: some View {
         let style = ClockLineStyle(showsDate: showsDate, showsWeekday: showsWeekday, uses24Hour: uses24Hour,
                                    wideTracking: wideTracking, emphasizesTime: emphasizesTime, rollsDigits: rollsDigits,
-                                   english: language == "en" || (language == "system" && !settings.isChinese))
+                                   english: !settings.isChinese)
         let parts = style.parts(at: now, in: settings.timeZone)
         let tracking: CGFloat = wideTracking ? fontSize * 0.1 : 0
         HStack(spacing: fontSize * 0.3 + tracking) {
@@ -128,9 +151,6 @@ enum DaylineImport {
                      ("menuBar.emphasizesTime", Pref.clockEmphasizesTime), ("menuBar.rollsDigits", Pref.clockRollsDigits)]
         for (old, new) in pairs {
             if let value = dayline.object(forKey: old) as? Bool { defaults.set(value, forKey: new) }
-        }
-        if let language = dayline.string(forKey: "language"), ["zh", "en"].contains(language) {
-            defaults.set(language, forKey: Pref.clockLanguage)
         }
     }
 }

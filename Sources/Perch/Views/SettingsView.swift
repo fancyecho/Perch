@@ -2,16 +2,17 @@ import ServiceManagement
 import SwiftUI
 
 /// The pages of Settings, shown under a toolbar of tabs.
+/// Settings, one page per part of Perch, with what they share (language, time zone, launching,
+/// every shortcut) on the first.
 enum SettingsTab: Int, CaseIterable {
-    case general, tasks, focus, status, island, line, help
+    case general, island, tasks, focus, line, help
 
     var title: String {
         switch self {
         case .general: tr("通用", "General")
+        case .island: tr("灵动岛", "Island")
         case .tasks: tr("待办", "Tasks")
         case .focus: tr("专注", "Focus")
-        case .status: tr("状态", "Status")
-        case .island: tr("灵动岛", "Island")
         case .line: tr("晾衣绳", "Line")
         case .help: tr("帮助", "Help")
         }
@@ -20,10 +21,9 @@ enum SettingsTab: Int, CaseIterable {
     var symbol: String {
         switch self {
         case .general: "gearshape"
+        case .island: "rectangle.topthird.inset.filled"
         case .tasks: "checklist"
         case .focus: "lamp.desk"
-        case .status: "gauge.with.dots.needle.67percent"
-        case .island: "rectangle.topthird.inset.filled"
         case .line: "tshirt"
         case .help: "questionmark.circle"
         }
@@ -32,12 +32,11 @@ enum SettingsTab: Int, CaseIterable {
     /// Each page is as tall as its content, so the window resizes as the tabs switch.
     var height: CGFloat {
         switch self {
-        case .general: 520
+        case .general: 760
+        case .island: 720
         case .tasks: 720
-        case .focus: 720
-        case .status: 640
-        case .island: 660
-        case .line: 700
+        case .focus: 640
+        case .line: 600
         case .help: 600
         }
     }
@@ -50,10 +49,9 @@ struct SettingsPane: View {
         Group {
             switch tab {
             case .general: GeneralPane()
+            case .island: IslandPane()
             case .tasks: TasksPane()
             case .focus: FocusPane()
-            case .status: StatusPane()
-            case .island: IslandPane()
             case .line: LinePane()
             case .help: HelpPane()
             }
@@ -67,11 +65,14 @@ struct SettingsPane: View {
 
 private struct GeneralPane: View {
     @Environment(AppSettings.self) private var settings
+    @Environment(FocusController.self) private var focus
+    @Bindable private var focusStore = FocusStore.shared
     @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
     @State private var loginError: String?
 
     var body: some View {
         @Bindable var settings = settings
+        let strictActive = ScheduleStore.shared.hasStrictRuleActive
         Form {
             Section {
                 Picker(tr("语言", "Language"), selection: $settings.language) {
@@ -80,10 +81,20 @@ private struct GeneralPane: View {
                     Text("English").tag(AppLanguage.english)
                 }
                 TimeZoneRow()
-                if FocusStore.shared.keepAlive {
+                    .disabled(strictActive)
+            } footer: {
+                Text(strictActive
+                     ? tr("严格时段进行中，暂时不能改时区。", "A strict schedule is running; the time zone can't change until it ends.")
+                     : tr("待办的日期、专注时段和胶囊里的时间都按这个时区走。", "Tasks, Focus schedules and the capsule's clock all run on this zone."))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section(tr("启动", "Launch")) {
+                if focusStore.keepAlive {
                     // The keep-alive agent starts Perch at login itself.
                     Toggle(isOn: .constant(true)) {
-                        SettingLabel(tr("登录时启动", "Launch at login"), tr("已包含在 专注 › 防止被强行退出 里", "Included in Focus › Keep Perch alive"))
+                        SettingLabel(tr("登录时启动", "Launch at login"), tr("已包含在下面的「防止被强行退出」里", "Included in Keep Perch alive below"))
                     }
                     .disabled(true)
                 } else {
@@ -92,6 +103,24 @@ private struct GeneralPane: View {
                 }
                 if let loginError {
                     Text(loginError).font(.caption).foregroundStyle(.red)
+                }
+                Toggle(isOn: $focusStore.keepAlive) {
+                    SettingLabel(tr("防止被强行退出", "Keep Perch alive"),
+                                 strictActive && focusStore.keepAlive
+                                    ? tr("严格时段进行中，暂时不能关闭", "Can't turn off while a strict schedule runs")
+                                    : tr("被活动监视器或强制退出结束后几秒内重新打开，严格时段建议打开",
+                                         "Reopens within seconds if Activity Monitor or Force Quit ends it; recommended with strict schedules"))
+                }
+                .disabled(strictActive && focusStore.keepAlive)
+                if focusStore.keepAliveNeedsApproval {
+                    LabeledContent {
+                        Button(tr("去设置", "Open Settings")) { BackgroundAgent.openLoginItemsSettings() }
+                    } label: {
+                        Label(tr("还需要在「系统设置 › 通用 › 登录项」里允许 Perch 在后台运行",
+                                 "Allow Perch in the background in System Settings › General › Login Items"),
+                              systemImage: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                    }
                 }
             }
 
@@ -102,10 +131,22 @@ private struct GeneralPane: View {
                 LabeledContent(tr("展开 / 收起灵动岛", "Open / close the island")) {
                     HotKeyRecorder(slot: .island)
                 }
+                LabeledContent(tr("开始专注 · 长按解除", "Start focus · hold to unlock")) {
+                    ShortcutKeys(text: focus.shortcutText, warning: focus.hotKeyStatus == .unavailable)
+                }
+                if let line = LineHost.controller() {
+                    LabeledContent(tr("放下 / 收起晾衣绳", "Show / hide the line")) {
+                        HStack(spacing: 8) {
+                            ShortcutKeys(text: line.shortcutText, warning: false)
+                            Button(tr("更改…", "Change…")) { line.recordShortcut() }
+                        }
+                    }
+                }
             }
 
             UpdateSection()
         }
+        .onAppear { focusStore.refreshBackgroundStatus() }
     }
 
     private func updateLoginItem(_ enabled: Bool) {
@@ -123,6 +164,27 @@ private struct GeneralPane: View {
     }
 }
 
+/// A fixed shortcut, shown as keys.
+private struct ShortcutKeys: View {
+    let text: String
+    let warning: Bool
+
+    var body: some View {
+        HStack(spacing: 6) {
+            if warning {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                    .help(tr("已被其他应用占用", "Taken by another app"))
+            }
+            Text(text)
+                .font(.system(size: 12, weight: .semibold).monospaced())
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(Color.primary.opacity(0.07), in: RoundedRectangle(cornerRadius: 6))
+        }
+    }
+}
+
 // MARK: - Tasks
 
 private struct TasksPane: View {
@@ -134,9 +196,34 @@ private struct TasksPane: View {
     @AppStorage(Pref.completionSound) private var completionSound = true
     @AppStorage(Pref.celebrations) private var celebrations = true
     @AppStorage(Pref.chimeStyle) private var chimeStyle = ChimeStyle.perch.rawValue
+    @AppStorage(Pref.islandTaskStyle) private var taskStyle = TaskStyle.capsule.rawValue
 
     var body: some View {
         Form {
+            Section {
+                Picker(tr("今天的任务显示在", "Today's tasks"), selection: $taskStyle) {
+                    Text(tr("刘海下的胶囊", "Capsule under the notch")).tag(TaskStyle.capsule.rawValue)
+                    Text(tr("灵动岛里", "Inside the island")).tag(TaskStyle.merged.rawValue)
+                    Text(tr("独立浮动胶囊", "Floating pill")).tag(TaskStyle.floating.rawValue)
+                }
+                Toggle(tr("悬停时预览接下来的任务", "Peek at upcoming tasks on hover"), isOn: $peekOnHover)
+                Toggle(tr("闲置时淡化", "Fade when idle"), isOn: $fadeWhenIdle)
+                if fadeWhenIdle {
+                    Slider(value: $idleOpacity, in: 0.25...0.9) {
+                        Text(tr("闲置透明度", "Idle opacity"))
+                    } minimumValueLabel: {
+                        Image(systemName: "circle.dotted")
+                    } maximumValueLabel: {
+                        Image(systemName: "circle.fill")
+                    }
+                }
+                if taskStyle == TaskStyle.floating.rawValue {
+                    Toggle(tr("浮动胶囊始终置顶", "Keep the floating pill on top"), isOn: $pinned)
+                }
+            }
+
+            CapsuleClockSection()
+
             Section(tr("体验", "Experience")) {
                 Toggle(tr("「今天」显示时间轴", "Show timeline in Today"), isOn: $showsTimeline)
                 Toggle(tr("完成音效", "Completion sound"), isOn: $completionSound)
@@ -167,23 +254,6 @@ private struct TasksPane: View {
                 }
                 Toggle(tr("清空今天时撒彩带", "Confetti when today is cleared"), isOn: $celebrations)
             }
-
-            Section(tr("胶囊", "Capsule")) {
-                Toggle(tr("悬停时预览接下来的任务", "Peek at upcoming tasks on hover"), isOn: $peekOnHover)
-                Toggle(tr("闲置时淡化", "Fade when idle"), isOn: $fadeWhenIdle)
-                if fadeWhenIdle {
-                    Slider(value: $idleOpacity, in: 0.25...0.9) {
-                        Text(tr("闲置透明度", "Idle opacity"))
-                    } minimumValueLabel: {
-                        Image(systemName: "circle.dotted")
-                    } maximumValueLabel: {
-                        Image(systemName: "circle.fill")
-                    }
-                }
-                Toggle(tr("浮动胶囊始终置顶", "Keep the floating pill on top"), isOn: $pinned)
-            }
-
-            CapsuleClockSection()
         }
     }
 }
@@ -208,8 +278,6 @@ private struct CapsuleClockSection: View {
     @AppStorage(Pref.clockWideTracking) private var wideTracking = true
     @AppStorage(Pref.clockEmphasizesTime) private var emphasizesTime = false
     @AppStorage(Pref.clockRollsDigits) private var rollsDigits = true
-    @AppStorage(Pref.clockLanguage) private var language = "system"
-
     var body: some View {
         Section {
             Picker(tr("显示时间", "Show the time"), selection: $mode) {
@@ -239,11 +307,6 @@ private struct CapsuleClockSection: View {
                 Toggle(isOn: $rollsDigits) {
                     SettingLabel(tr("数字滚动", "Rolling digits"), tr("整分钟时变化的数字向上滚动", "Changing digits roll up as the minute turns"))
                 }
-                Picker(tr("语言", "Language"), selection: $language) {
-                    Text(tr("跟随界面", "Same as Perch")).tag("system")
-                    Text("中文").tag("zh")
-                    Text("English").tag("en")
-                }
             }
         } header: {
             Text(tr("胶囊里的时间", "Time in the Capsule"))
@@ -265,7 +328,6 @@ private struct IslandPane: View {
     @AppStorage(Pref.islandDevices) private var devices = true
     @AppStorage(Pref.islandBattery) private var battery = true
     @AppStorage(Pref.islandReminders) private var reminders = true
-    @AppStorage(Pref.islandTaskStyle) private var taskStyle = TaskStyle.capsule.rawValue
     @AppStorage(Pref.islandHaptics) private var haptics = true
     @AppStorage(Pref.hudColorful) private var hudColorful = true
     @AppStorage(Pref.hudShowsValue) private var hudShowsValue = false
@@ -276,11 +338,6 @@ private struct IslandPane: View {
             Section {
                 Toggle(tr("在刘海处显示灵动岛", "Show the island at the notch"), isOn: $enabled)
                 if enabled {
-                    Picker(tr("待办显示方式", "Today's tasks"), selection: $taskStyle) {
-                        Text(tr("刘海下的胶囊", "Capsule under the notch")).tag(TaskStyle.capsule.rawValue)
-                        Text(tr("融入灵动岛", "Inside the island")).tag(TaskStyle.merged.rawValue)
-                        Text(tr("独立浮动胶囊", "Floating pill")).tag(TaskStyle.floating.rawValue)
-                    }
                     Toggle(tr("悬停时展开", "Expand on hover"), isOn: $hoverToExpand)
                     Toggle(tr("触感反馈", "Haptic feedback"), isOn: $haptics)
                 }
@@ -309,6 +366,7 @@ private struct IslandPane: View {
                     }
                 }
             }
+            StatusSections(islandEnabled: enabled)
         }
     }
 }
@@ -358,13 +416,12 @@ private struct HelpPane: View {
                 ReferenceRow(example: tr("指针在照片上按空格 · ⌫ · 在绳上按 ⌘Z", "Space · ⌫ on a photo · ⌘Z on the line"), meaning: tr("快速查看 · 丢掉 · 挂回刚丢的", "Quick Look · let it go · hang it back"))
                 ReferenceRow(example: tr("右键 › 固定 · 拿在手上", "Right-click › Pin · Hold"), meaning: tr("钉在左边不被挤掉 · 取下放在眼前", "Keep it at the left · hold it in front of you"))
                 ReferenceRow(example: tr("访达里右键图片 › 服务 › Hang on Perch", "In Finder, right-click an image › Services › Hang on Perch"), meaning: tr("把任意图片挂上绳", "Hang any image on the line"))
-                ReferenceRow(example: tr("指针顶到屏幕上沿（正中除外）· ⌃⌥T", "Push against the top edge (not the middle) · ⌃⌥T"), meaning: tr("放下 / 收起晾衣绳", "Bring the line down / put it away"))
+                ReferenceRow(example: tr("指针停在菜单栏中间三分之一（灵动岛两侧）· ⌃⌥T", "Rest in the middle third of the menu bar, beside the island · ⌃⌥T"), meaning: tr("放下 / 收起晾衣绳", "Bring the line down / put it away"))
             }
 
             Section(tr("状态", "Status")) {
-                ReferenceRow(example: tr("灵动岛的状态页 · 点读数切换详情", "The island's status page · click a gauge"), meaning: tr("系统状态与详情", "Status and details"))
-                ReferenceRow(example: tr("菜单栏读数 · Perch 菜单", "Menu bar readout · Perch menu"), meaning: tr("完整的系统状态面板", "The full status panel"))
-                ReferenceRow(example: tr("右键进程", "Right-click a process"), meaning: tr("在访达中显示、切换或退出", "Show in Finder, switch, or quit"))
+                ReferenceRow(example: tr("展开灵动岛后上下滑 · 点菜单栏读数", "Swipe the open island up or down · click the menu bar readout"), meaning: tr("系统状态", "System status"))
+                ReferenceRow(example: tr("点 CPU、内存、网络的读数", "Click the CPU, memory or network gauge"), meaning: tr("看它最近两分钟的曲线", "Its last two minutes"))
             }
         }
     }
