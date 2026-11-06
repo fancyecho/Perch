@@ -176,7 +176,7 @@ private struct PassStrip: View {
             let urgent = remaining <= 30
             HStack(spacing: 12) {
                 PassRing(icon: pass.icon, isSite: pass.site != nil,
-                         fraction: min(Double(remaining) / ActivePass.duration, 1), urgent: urgent, lineWidth: 3)
+                         fraction: min(Double(remaining) / pass.duration, 1), urgent: urgent, lineWidth: 3)
                     .frame(width: 44, height: 44)
                 VStack(alignment: .leading, spacing: 3) {
                     Text(pass.name)

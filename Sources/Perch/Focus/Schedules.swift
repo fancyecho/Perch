@@ -176,16 +176,22 @@ enum SystemClock {
 
 // MARK: - Store
 
-/// The schedules, plus "five more minutes" passes and how often something was blocked today.
+/// The schedules, plus breaks (passes) and how often something was blocked today.
+///
+/// A break lets one paused app or site through for a while, gentle or strict alike: three a day
+/// across all schedules, each as long as chosen, up to half an hour. Strict still means no turning
+/// the schedule off, no editing it and no quitting Perch; a break just ends on time.
 @Observable
 final class ScheduleStore {
     static let shared = ScheduleStore()
-    static let passMinutes = 5
+    /// The lengths a break can be, in minutes.
+    static let passChoices = [5, 10, 15, 30]
     static let passesPerDay = 3
 
     enum Keys {
         static let rules = "focus.rules"
         static let passCounts = "focus.passCounts"
+        static let passMinutes = "focus.passMinutes"
         static let pins = "focus.strictPins"
         static let attempts = "focus.attempts"
     }
@@ -196,8 +202,19 @@ final class ScheduleStore {
 
     /// Pass key (a bundle id, or "web:" + site) → when its pass runs out.
     private(set) var passes: [String: Date] = [:]
-    /// "rule id|day" → passes used that day.
+    /// Pass key → how long that pass was, for its ring.
+    private(set) var passLengths: [String: TimeInterval] = [:]
+    /// Day → breaks taken that day.
     private var passCounts: [String: Int]
+
+    /// The break length chosen last, offered first next time.
+    var passMinutes: Int {
+        get {
+            let saved = UserDefaults.standard.integer(forKey: Keys.passMinutes)
+            return Self.passChoices.contains(saved) ? saved : 10
+        }
+        set { UserDefaults.standard.set(newValue, forKey: Keys.passMinutes) }
+    }
     /// Rule id → the copy kept while a strict schedule runs.
     private(set) var pins: [UUID: StrictPin]
     /// "pass key|day" → times it was blocked that day.
@@ -231,19 +248,18 @@ final class ScheduleStore {
         return byRule.values.sorted { $0.end < $1.end }
     }
 
-    /// The schedule blocking this app right now. A pass only gets past gentle schedules.
+    /// The schedule blocking this app right now; none while it's on a break.
     func blockingOccurrence(for bundleID: String, at now: Date = .now) -> Occurrence? {
-        let hasPass = (passes[bundleID] ?? .distantPast) > now
+        guard !hasPass(bundleID, at: now) else { return nil }
         return activeOccurrences(at: now)
-            .filter { $0.rule.blocks(bundleID) && ($0.rule.isStrict || !hasPass) }
+            .filter { $0.rule.blocks(bundleID) }
             .max { a, b in a.rule.isStrict != b.rule.isStrict ? b.rule.isStrict : a.end < b.end }
     }
 
-    /// The schedule and site rule blocking this address right now. A pass only gets past gentle schedules.
+    /// The schedule and site rule blocking this address right now; none while the site is on a break.
     func blockingSite(for url: URL, at now: Date = .now) -> (occurrence: Occurrence, site: BlockedSite)? {
         let candidates = activeOccurrences(at: now).compactMap { occurrence -> (occurrence: Occurrence, site: BlockedSite)? in
-            guard let site = occurrence.rule.blockedSite(for: url) else { return nil }
-            if !occurrence.rule.isStrict, (passes[site.passKey] ?? .distantPast) > now { return nil }
+            guard let site = occurrence.rule.blockedSite(for: url), !hasPass(site.passKey, at: now) else { return nil }
             return (occurrence, site)
         }
         return candidates.max { a, b in
@@ -253,10 +269,11 @@ final class ScheduleStore {
 
     /// Whether a site is still blocked (the shield checks before it goes).
     func isBlocking(site: BlockedSite, at now: Date = .now) -> Bool {
-        activeOccurrences(at: now).contains { occurrence in
-            occurrence.rule.sites.contains(site)
-                && (occurrence.rule.isStrict || (passes[site.passKey] ?? .distantPast) <= now)
-        }
+        !hasPass(site.passKey, at: now) && activeOccurrences(at: now).contains { $0.rule.sites.contains(site) }
+    }
+
+    func hasPass(_ key: String, at now: Date = .now) -> Bool {
+        (passes[key] ?? .distantPast) > now
     }
 
     /// Running schedules with sites in them; without any, there's no need to look at browsers.
@@ -292,18 +309,21 @@ final class ScheduleStore {
         activeOccurrences().contains { $0.rule.isStrict }
     }
 
-    func passesLeft(for rule: BlockRule, at now: Date = .now) -> Int {
-        guard !rule.isStrict else { return 0 }
-        return max(0, Self.passesPerDay - (passCounts[passKey(rule, now)] ?? 0))
+    /// Breaks left today, in Perch's time zone.
+    func passesLeft(at now: Date = .now) -> Int {
+        max(0, Self.passesPerDay - (passCounts[Self.dayKey(now)] ?? 0))
     }
 
-    func grantPass(for key: String, rule: BlockRule, at now: Date = .now) {
-        guard passesLeft(for: rule, at: now) > 0 else { return }
-        passCounts[passKey(rule, now), default: 0] += 1
-        passes[key] = now.addingTimeInterval(TimeInterval(Self.passMinutes * 60))
-        // Only the last few days of counts are worth keeping.
-        let recent = Set((0..<3).map { passKey(rule, now.addingTimeInterval(-Double($0) * 86400)) })
-        passCounts = passCounts.filter { key, _ in !key.hasPrefix(rule.id.uuidString) || recent.contains(key) }
+    /// A break of `minutes` (at most half an hour) for one app or site.
+    func grantPass(for key: String, minutes: Int, at now: Date = .now) {
+        guard passesLeft(at: now) > 0 else { return }
+        let length = TimeInterval(min(max(minutes, 1), Self.passChoices.max() ?? 30) * 60)
+        passCounts[Self.dayKey(now), default: 0] += 1
+        passes[key] = now.addingTimeInterval(length)
+        passLengths[key] = length
+        // Only the last few days of counts are worth keeping (this also drops the old per-schedule ones).
+        let recent = Set((0..<3).map { Self.dayKey(now.addingTimeInterval(-Double($0) * 86400)) })
+        passCounts = passCounts.filter { recent.contains($0.key) }
         UserDefaults.standard.set(passCounts, forKey: Keys.passCounts)
     }
 
@@ -331,21 +351,19 @@ final class ScheduleStore {
 
     func revokePass(for key: String) {
         passes[key] = nil
+        passLengths[key] = nil
     }
 
     func dropExpiredPasses(at now: Date = .now) {
         let live = passes.filter { $0.value > now }
-        if live.count != passes.count { passes = live }
+        guard live.count != passes.count else { return }
+        passes = live
+        passLengths = passLengths.filter { live[$0.key] != nil }
     }
 
     func newRule(name: String? = nil, start: Int = 19 * 60, end: Int = 22 * 60, weekdays: Set<Int> = Set(1...7)) -> BlockRule {
         BlockRule(name: name ?? tr("新时段", "New Schedule"), tint: rules.count % RuleTint.all.count, weekdays: weekdays,
                   windows: [TimeWindow(start: start, end: end)], apps: [])
-    }
-
-    private func passKey(_ rule: BlockRule, _ date: Date) -> String {
-        let parts = rule.calendar.dateComponents([.year, .month, .day], from: date)
-        return "\(rule.id.uuidString)|\(parts.year ?? 0)-\(parts.month ?? 0)-\(parts.day ?? 0)"
     }
 
     private func save() {

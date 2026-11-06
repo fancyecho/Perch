@@ -11,7 +11,8 @@ final class ShieldController {
     private var isDismissing = false
 
     var onBack: () -> Void = {}
-    var onPass: (BlockTarget, BlockRule) -> Void = { _, _ in }
+    /// A break was taken: what for, and how many minutes.
+    var onPass: (BlockTarget, Int) -> Void = { _, _ in }
 
     var isShowing: Bool { target != nil && !isDismissing }
 
@@ -33,13 +34,15 @@ final class ShieldController {
         model.isSite = target.isSite
         model.occurrence = occurrence
         model.passesLeft = passesLeft
+        model.passMinutes = ScheduleStore.shared.passMinutes
         model.attempt = attempt ?? 1
         model.onBack = { [weak self] in self?.onBack() }
         model.onHoldChanged = { [weak self] holding in self?.setHolding(holding) }
         model.onHoldCompleted = { [weak self] in
-            guard let self, let target = self.target, let rule = self.model.occurrence?.rule else { return }
+            guard let self, let target = self.target else { return }
             SoundPlayer.shared.playNote(4)
-            self.onPass(target, rule)
+            ScheduleStore.shared.passMinutes = self.model.passMinutes
+            self.onPass(target, self.model.passMinutes)
         }
 
         buildWindows()
@@ -126,6 +129,8 @@ final class ShieldModel {
     var occurrence: Occurrence?
     var quote = Quotes.random()
     var passesLeft = 0
+    /// How long the break will be.
+    var passMinutes = 10
     /// The how-many-th time today it was opened.
     var attempt = 1
     var holding = false
@@ -284,6 +289,9 @@ private struct ShieldActions: View {
 
     var body: some View {
         VStack(spacing: 16) {
+            if model.passesLeft > 0 {
+                BreakLengthPicker(model: model)
+            }
             HStack(spacing: 14) {
                 if model.passesLeft > 0 {
                     HoldToPass(model: model)
@@ -316,19 +324,53 @@ private struct ShieldActions: View {
     }
 
     private var footnote: String {
+        let used = model.passesLeft == 0
+            ? tr("今天的 \(ScheduleStore.passesPerDay) 次休息已经用完了 · ", "Today's \(ScheduleStore.passesPerDay) breaks are used up · ") : ""
         if rule.isStrict {
-            return model.isSite
-                ? tr("严格时段 · 结束前不能跳过，回去时会关掉这个标签页", "Strict schedule · no skipping; going back closes this tab")
-                : tr("严格时段 · 结束前不能跳过，回去时会退出 \(model.appName)", "Strict schedule · no skipping; going back quits \(model.appName)")
+            return used + (model.isSite
+                ? tr("严格时段 · 休息到点就结束，回去时会关掉这个标签页", "Strict schedule · a break ends on time; going back closes this tab")
+                : tr("严格时段 · 休息到点就结束，回去时会退出 \(model.appName)", "Strict schedule · a break ends on time; going back quits \(model.appName)"))
         }
-        if model.isSite { return tr("按回车回去，这个标签页会被关掉", "Press Return to go back; this tab will close") }
-        if model.passesLeft == 0 { return tr("今天的临时使用次数已经用完了", "No more passes today") }
-        return tr("按回车回去", "Press Return to go back")
+        if model.isSite { return used + tr("按回车回去，这个标签页会被关掉", "Press Return to go back; this tab will close") }
+        return used + tr("按回车回去", "Press Return to go back")
     }
 }
 
-/// Hold for three seconds to use it five more minutes: the capsule fills from the left and springs
-/// back if let go early.
+/// How long a break will be: a few lengths up to half an hour, the last one chosen first.
+private struct BreakLengthPicker: View {
+    @Bindable var model: ShieldModel
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Text(tr("休息", "Break"))
+                .opacity(0.55)
+                .padding(.trailing, 6)
+            ForEach(ScheduleStore.passChoices, id: \.self) { minutes in
+                let selected = model.passMinutes == minutes
+                Button {
+                    withAnimation(.snappy(duration: 0.25)) { model.passMinutes = minutes }
+                } label: {
+                    Text(tr("\(minutes) 分钟", "\(minutes) min"))
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(Capsule().fill(.white.opacity(selected ? 0.22 : 0)))
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .opacity(selected ? 1 : 0.6)
+                .disabled(model.holding)
+                .accessibilityAddTraits(selected ? .isSelected : [])
+            }
+        }
+        .font(.system(size: 12.5, weight: .semibold).monospacedDigit())
+        .padding(4)
+        .padding(.leading, 10)
+        .glassEffect(.regular, in: .capsule)
+    }
+}
+
+/// Hold for three seconds to take the break: the capsule fills from the left and springs back if
+/// let go early.
 private struct HoldToPass: View {
     @Bindable var model: ShieldModel
 
@@ -342,9 +384,9 @@ private struct HoldToPass: View {
                     .rotationEffect(.degrees(-90))
             }
             .frame(width: 15, height: 15)
-            Text(model.holding ? tr("继续按住…", "Keep holding…") : tr("按住，再用 \(ScheduleStore.passMinutes) 分钟", "Hold for \(ScheduleStore.passMinutes) more minutes"))
+            Text(model.holding ? tr("继续按住…", "Keep holding…") : tr("按住，休息 \(model.passMinutes) 分钟", "Hold for a \(model.passMinutes)-minute break"))
                 .contentTransition(.interpolate)
-            Text(tr("剩 \(model.passesLeft) 次", "\(model.passesLeft) left"))
+            Text(tr("今天还剩 \(model.passesLeft) 次", "\(model.passesLeft) left today"))
                 .opacity(0.5)
         }
         .font(.system(size: 13, weight: .semibold))
@@ -365,6 +407,6 @@ private struct HoldToPass: View {
                             perform: model.onHoldCompleted, onPressingChanged: model.onHoldChanged)
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
-        .accessibilityHint(tr("按住三秒，临时使用 \(ScheduleStore.passMinutes) 分钟", "Hold for three seconds to use it \(ScheduleStore.passMinutes) more minutes"))
+        .accessibilityHint(tr("按住三秒，休息 \(model.passMinutes) 分钟", "Hold for three seconds for a \(model.passMinutes)-minute break"))
     }
 }

@@ -83,6 +83,35 @@ struct ScheduleTests {
     }
 }
 
+@MainActor
+struct BreakTests {
+    @Test func aBreakGetsPastStrictSchedulesTooAndTheyAreCounted() {
+        let store = ScheduleStore.shared
+        let saved = store.rules
+        defer { store.rules = saved }
+        var strict = rule(0, 0, strict: true)
+        strict.apps = [BlockedApp(bundleID: "com.example.chat", name: "Chat")]
+        store.rules = [strict]
+
+        let now = Date.now.addingTimeInterval(30 * 86400) // a fresh day for the count
+        #expect(store.blockingOccurrence(for: "com.example.chat", at: now) != nil)
+        let left = store.passesLeft(at: now)
+        store.grantPass(for: "com.example.chat", minutes: 15, at: now)
+        #expect(store.blockingOccurrence(for: "com.example.chat", at: now.addingTimeInterval(60)) == nil)
+        #expect(store.blockingOccurrence(for: "com.example.chat", at: now.addingTimeInterval(16 * 60)) != nil)
+        #expect(store.passesLeft(at: now) == left - 1)
+        store.revokePass(for: "com.example.chat")
+    }
+
+    @Test func aBreakIsNeverLongerThanHalfAnHour() {
+        let store = ScheduleStore.shared
+        let now = Date.now.addingTimeInterval(40 * 86400)
+        store.grantPass(for: "com.example.video", minutes: 90, at: now)
+        #expect(store.passLengths["com.example.video"] == TimeInterval(30 * 60))
+        store.revokePass(for: "com.example.video")
+    }
+}
+
 struct BlockedSiteTests {
     @Test func normalizesWhatWasTyped() {
         #expect(BlockedSite.normalize("https://www.Bilibili.com/video/?spm=1") == "bilibili.com/video")

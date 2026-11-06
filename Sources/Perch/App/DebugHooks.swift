@@ -98,6 +98,25 @@ extension AppDelegate {
                let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) {
                 try? png.write(to: URL(fileURLWithPath: out + "-levels.png"))
             }
+        case "snapshield":
+            // The shield over a strict schedule, rendered to a file next to the given path.
+            let out = parts.dropFirst().joined(separator: ":")
+            let model = ShieldModel()
+            model.appName = "WeChat"
+            model.appIcon = NSWorkspace.shared.icon(forFile: "/System/Applications/Messages.app")
+            model.occurrence = Occurrence(rule: BlockRule(name: tr("专注学习", "Study"), tint: 0, weekdays: Set(1...7),
+                                                          windows: [TimeWindow(start: 0, end: 0)], apps: [], isStrict: true),
+                                          start: .now.addingTimeInterval(-3600), end: .now.addingTimeInterval(3600))
+            model.passesLeft = 2
+            model.passMinutes = 15
+            model.appeared = true
+            let renderer = ImageRenderer(content: ShieldView(model: model, showsContent: true)
+                .frame(width: 1200, height: 760).background(Color(white: 0.12)).environment(\.colorScheme, .dark))
+            renderer.scale = 1
+            if let tiff = renderer.nsImage?.tiffRepresentation,
+               let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) {
+                try? png.write(to: URL(fileURLWithPath: out + "-shield.png"))
+            }
         case "pass": focus.debugGrantPass(parts.dropFirst().first ?? "com.apple.Safari")
         case "endpass": focus.passes.forEach { focus.endPass($0.key) }
         case "testrule":
@@ -118,10 +137,9 @@ extension AppDelegate {
 }
 
 extension FocusController {
-    /// A five-minute pass for an app, as if a gentle schedule had let it through.
+    /// A break for an app, as if taken from its shield.
     func debugGrantPass(_ bundleID: String) {
-        let rule = BlockRule(name: "Debug", tint: 0, weekdays: Set(1...7), windows: [TimeWindow(start: 0, end: 0)], apps: [])
-        schedules.grantPass(for: bundleID, rule: rule)
+        schedules.grantPass(for: bundleID, minutes: schedules.passMinutes)
         onPassesChange?()
         refreshPassesForDebug()
     }

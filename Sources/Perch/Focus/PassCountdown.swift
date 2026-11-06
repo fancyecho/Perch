@@ -99,7 +99,7 @@ private struct PassPill: View {
     private var urgent: Bool { remaining <= 30 }
 
     var body: some View {
-        let fraction = min(Double(remaining) / ActivePass.duration, 1)
+        let fraction = min(Double(remaining) / pass.duration, 1)
         // The last 30 seconds breathe once a second, like a lamp burning down.
         let breathing = urgent && remaining % 2 == 0
 

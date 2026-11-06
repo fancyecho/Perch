@@ -436,7 +436,7 @@ private struct PassWing: View {
                         .fixedSize()
                 } else {
                     PassRing(icon: pass.icon, isSite: pass.site != nil,
-                             fraction: min(Double(remaining) / ActivePass.duration, 1), urgent: urgent, lineWidth: 2)
+                             fraction: min(Double(remaining) / pass.duration, 1), urgent: urgent, lineWidth: 2)
                         .frame(width: 21, height: 21)
                 }
             }

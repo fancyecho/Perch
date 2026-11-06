@@ -1126,12 +1126,17 @@ private struct ModeCard: View {
     let tint: Int
     let focusStore = FocusStore.shared
 
+    /// The same breaks either way.
+    static var breakRule: String {
+        tr("每天可以休息 \(ScheduleStore.passesPerDay) 次，每次 5–30 分钟", "Up to \(ScheduleStore.passesPerDay) breaks a day, 5–30 minutes each")
+    }
+
     private var guarantees: [String] {
         [
             tr("被暂停的 App 直接退出、网站标签页直接关掉，后台播放也一起停下",
                "Paused apps quit and their sites' tabs close, background playback included"),
-            tr("时段内不能跳过，也不能修改、停用、删除这个时段",
-               "No skipping, and the schedule can't be changed, turned off or deleted while it runs"),
+            tr("时段内不能修改、停用、删除这个时段；休息到点自动结束",
+               "The schedule can't be changed, turned off or deleted while it runs; a break ends on time"),
             tr("改系统时间、换时区，都不会让它提前结束", "Changing the clock or time zone won't end it early"),
             tr("Perch 不能从菜单退出；被强行结束后会自动重开", "Perch can't be quit from its menus, and comes back if it's killed"),
         ]
@@ -1141,10 +1146,11 @@ private struct ModeCard: View {
         FocusCard(title: tr("打开被暂停的 App 时", "When a Paused App Opens"), icon: "hand.raised") {
             HStack(spacing: 12) {
                 option(strict: false, title: tr("温和", "Gentle"), icon: "leaf",
-                       text: tr("收起 App。可以按住按钮再用 \(ScheduleStore.passMinutes) 分钟，每天最多 \(ScheduleStore.passesPerDay) 次",
-                                "The app is put away. Hold a button for \(ScheduleStore.passMinutes) more minutes, up to \(ScheduleStore.passesPerDay) times a day"))
+                       text: tr("收起 App，时段可以随时停用或修改。\(Self.breakRule)",
+                                "The app is put away; the schedule can be turned off or changed any time. \(Self.breakRule)"))
                 option(strict: true, title: tr("严格", "Strict"), icon: "lock",
-                       text: tr("没有商量的余地，到点才结束", "No exceptions until it ends"))
+                       text: tr("到点才结束，期间不能停用、修改，也不能退出 Perch。\(Self.breakRule)",
+                                "Runs until it ends: no turning it off, changing it or quitting Perch. \(Self.breakRule)"))
             }
 
             if isStrict {

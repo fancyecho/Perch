@@ -46,6 +46,8 @@ enum BlockTarget {
 struct ActivePass: Identifiable, Equatable {
     let key: String
     let end: Date
+    /// How long the break was, for the ring that burns down.
+    var duration: TimeInterval = 5 * 60
 
     var id: String { key }
 
@@ -65,8 +67,6 @@ struct ActivePass: Identifiable, Equatable {
     var icon: NSImage {
         site.map { SiteIcons.shared.icon(for: $0) } ?? AppIcons.icon(for: key)
     }
-
-    static let duration = TimeInterval(ScheduleStore.passMinutes * 60)
 }
 
 /// Watches every app and browser: apps a schedule pauses are put away (quit, in a strict one), and
@@ -92,7 +92,9 @@ final class AppBlocker: NSObject {
     var onPassesChange: () -> Void = {}
 
     var activePasses: [ActivePass] {
-        store.passes.filter { $0.value > .now }.map { ActivePass(key: $0.key, end: $0.value) }.sorted { $0.end < $1.end }
+        store.passes.filter { $0.value > .now }
+            .map { ActivePass(key: $0.key, end: $0.value, duration: store.passLengths[$0.key] ?? 5 * 60) }
+            .sorted { $0.end < $1.end }
     }
 
     func start() {
@@ -107,7 +109,7 @@ final class AppBlocker: NSObject {
         timer?.tolerance = 1
 
         shield.onBack = { [weak self] in self?.backToWork() }
-        shield.onPass = { [weak self] target, rule in self?.grantPass(to: target, rule: rule) }
+        shield.onPass = { [weak self] target, minutes in self?.grantPass(to: target, minutes: minutes) }
         evaluate()
     }
 
@@ -187,7 +189,7 @@ final class AppBlocker: NSObject {
         // The same thing coming to the front again isn't another attempt.
         let isNewAttempt = !(shield.isShowing && shield.target?.identity == target.identity)
         let attempt = isNewAttempt ? store.recordAttempt(for: target.passKey) : nil
-        shield.show(target, occurrence: occurrence, passesLeft: store.passesLeft(for: occurrence.rule), attempt: attempt)
+        shield.show(target, occurrence: occurrence, passesLeft: store.passesLeft(), attempt: attempt)
     }
 
     /// Paused apps in the background can still be scrolled through behind other windows, so they're
@@ -246,7 +248,9 @@ final class AppBlocker: NSObject {
     /// Strict schedules close matching tabs in every browser, background video included. The tab
     /// under the shield stays until "back to work".
     private func sweepStrictTabs() {
+        // A site on a break stays open.
         let strictSites = store.activeSiteOccurrences().filter(\.rule.isStrict).flatMap(\.rule.sites)
+            .filter { !store.hasPass($0.passKey) }
         guard !strictSites.isEmpty else { return }
         let shownBrowser: pid_t? = {
             if case .site(_, let browser) = shield.target { return browser.processIdentifier }
@@ -274,8 +278,8 @@ final class AppBlocker: NSObject {
         }
     }
 
-    private func grantPass(to target: BlockTarget, rule: BlockRule) {
-        store.grantPass(for: target.passKey, rule: rule)
+    private func grantPass(to target: BlockTarget, minutes: Int) {
+        store.grantPass(for: target.passKey, minutes: minutes)
         shield.dismiss(playSound: false)
         switch target {
         case .app(let app): app.activate()

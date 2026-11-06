@@ -406,8 +406,8 @@ private struct HelpPane: View {
                 ReferenceRow(example: "⌥⌘F", meaning: tr("开始专注，模糊所有屏幕", "Start focus: blur every screen"))
                 ReferenceRow(example: tr("长按 ⌥⌘F 约 4 秒 · 或输入解锁语句", "Hold ⌥⌘F for 4 s · or type the phrase"), meaning: tr("解除模糊", "Lift the blur"))
                 ReferenceRow(example: tr("专注横幅上的台灯按钮", "The lamp on a task's focus banner"), meaning: tr("离开电脑去做这项任务", "Step away to do that task"))
-                ReferenceRow(example: tr("拦截界面上按住按钮 3 秒", "Hold the button on the shield for 3 s"), meaning: tr("温和时段里再用 5 分钟", "Five more minutes (gentle schedules)"))
-                ReferenceRow(example: tr("展开刘海上的倒计时", "Open the countdown at the notch"), meaning: tr("提前结束临时使用", "End a pass early"))
+                ReferenceRow(example: tr("拦截界面上选好时长，按住按钮 3 秒", "Pick a length on the shield, hold the button for 3 s"), meaning: tr("休息一会儿（每天 3 次，5–30 分钟）", "Take a break (3 a day, 5–30 min)"))
+                ReferenceRow(example: tr("展开刘海上的倒计时", "Open the countdown at the notch"), meaning: tr("提前结束休息", "End a break early"))
             }
 
             Section(tr("晾衣绳", "Line")) {
