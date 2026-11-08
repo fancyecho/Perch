@@ -60,9 +60,23 @@ enum DateText {
     static func isOverdue(_ task: TaskItem, now: Date) -> Bool {
         guard !task.isDone, let schedule = task.schedule else { return false }
         switch schedule {
-        case .time(let date): return date < now
+        case .time: return (task.end ?? now) < now
         case .day(let day): return day < today(now)
         }
+    }
+
+    /// "1小时30分" / "1h 30m"
+    static func duration(_ minutes: Int) -> String {
+        let h = minutes / 60, m = minutes % 60
+        if h == 0 { return tr("\(m) 分钟", "\(m) min") }
+        if m == 0 { return tr("\(h) 小时", "\(h) h") }
+        return tr("\(h)小时\(m)分", "\(h)h \(m)m")
+    }
+
+    /// "15:00 – 16:30"
+    static func timeRange(_ task: TaskItem) -> String? {
+        guard let start = task.schedule?.time, let end = task.end else { return nil }
+        return "\(time(start)) – \(time(end))"
     }
 
     static func isDueToday(_ task: TaskItem, now: Date) -> Bool {

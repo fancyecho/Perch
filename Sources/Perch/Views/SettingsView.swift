@@ -197,6 +197,8 @@ private struct TasksPane: View {
     @AppStorage(Pref.celebrations) private var celebrations = true
     @AppStorage(Pref.chimeStyle) private var chimeStyle = ChimeStyle.perch.rawValue
     @AppStorage(Pref.islandTaskStyle) private var taskStyle = TaskStyle.capsule.rawValue
+    @AppStorage(Pref.taskDefaultColor) private var defaultColor = TaskColor.coral.rawValue
+    @AppStorage(Pref.taskTopicColors) private var topicColors = true
 
     var body: some View {
         Form {
@@ -226,6 +228,10 @@ private struct TasksPane: View {
 
             Section(tr("体验", "Experience")) {
                 Toggle(tr("「今天」显示时间轴", "Show timeline in Today"), isOn: $showsTimeline)
+                LabeledContent(tr("任务默认颜色", "Default task color")) {
+                    ColorSwatchPicker(selection: $defaultColor)
+                }
+                Toggle(tr("按任务类型自动配色（学习、运动、会议…）", "Color tasks by kind (study, exercise, meetings…)"), isOn: $topicColors)
                 Toggle(tr("完成音效", "Completion sound"), isOn: $completionSound)
                 if completionSound {
                     LabeledContent(tr("音色", "Sound")) {
@@ -580,5 +586,33 @@ struct TimeZoneRow: View {
             parts.append(tr("不实行夏令时", "no daylight saving"))
         }
         return parts.joined(separator: " · ")
+    }
+}
+
+/// A row of color dots; the chosen one wears a ring.
+private struct ColorSwatchPicker: View {
+    @Binding var selection: String
+
+    var body: some View {
+        HStack(spacing: 7) {
+            ForEach(TaskColor.allCases, id: \.self) { color in
+                let isOn = selection == color.rawValue
+                Button {
+                    selection = color.rawValue
+                } label: {
+                    Circle()
+                        .fill(color.color)
+                        .frame(width: 16, height: 16)
+                        .padding(3)
+                        .overlay(Circle().strokeBorder(color.color.opacity(isOn ? 0.9 : 0), lineWidth: 1.5))
+                        .contentShape(.circle)
+                }
+                .buttonStyle(.plain)
+                .help(color.title)
+                .accessibilityLabel(color.title)
+                .accessibilityAddTraits(isOn ? .isSelected : [])
+            }
+        }
+        .animation(.snappy(duration: 0.2), value: selection)
     }
 }

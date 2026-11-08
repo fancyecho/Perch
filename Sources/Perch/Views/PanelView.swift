@@ -191,7 +191,10 @@ private struct QuickAddField: View {
             if hasChips(parsed) {
                 HStack(spacing: 6) {
                     if parsed.hasExplicitDate, let label = DateText.dueLabel(parsed.schedule, now: now) {
-                        Chip(text: label, symbol: parsed.schedule?.time == nil ? "calendar" : "clock")
+                        Chip(text: label + rangeEnd(parsed), symbol: parsed.schedule?.time == nil ? "calendar" : "clock")
+                    }
+                    if let minutes = parsed.duration {
+                        Chip(text: DateText.duration(minutes), symbol: "hourglass", tint: .teal)
                     }
                     if parsed.priority != .none {
                         Chip(text: tr("\(parsed.priority.title)优先级", "\(parsed.priority.title) priority"), symbol: "flag.fill", tint: parsed.priority.tint)
@@ -218,7 +221,13 @@ private struct QuickAddField: View {
     }
 
     private func hasChips(_ parsed: ParsedInput) -> Bool {
-        parsed.hasExplicitDate || parsed.priority != .none || !parsed.tags.isEmpty
+        parsed.hasExplicitDate || parsed.priority != .none || !parsed.tags.isEmpty || parsed.duration != nil
+    }
+
+    /// " – 16:30" after a start time, when the text gave a length.
+    private func rangeEnd(_ parsed: ParsedInput) -> String {
+        guard let start = parsed.schedule?.time, let minutes = parsed.duration else { return "" }
+        return " – " + DateText.time(start.addingTimeInterval(Double(minutes) * 60))
     }
 
     /// Parses the field's live text at the moment of submission, never a value cached by the view.
@@ -386,9 +395,12 @@ private struct TaskList: View {
     private var today: some View {
         let overdue = store.overdue(now: now)
         let due = store.dueToday(now: now)
-        let doneToday = store.doneToday(now: now)
+        let allDoneToday = store.doneToday(now: now)
+        // Finished timed tasks keep their place on the timeline, so the day reads as a whole.
+        let doneOnTimeline = showsTimeline ? allDoneToday.filter { $0.hasTime && DateText.isDueToday($0, now: now) } : []
+        let doneToday = allDoneToday.filter { task in !doneOnTimeline.contains { $0.id == task.id } }
 
-        if overdue.isEmpty && due.isEmpty {
+        if overdue.isEmpty && due.isEmpty && doneOnTimeline.isEmpty {
             EmptyState(
                 symbol: doneToday.isEmpty ? "sun.max" : "checkmark.seal",
                 title: doneToday.isEmpty ? tr("今天还没有安排", "Nothing planned for today") : tr("今天的事都做完了", "All done for today"),
@@ -399,12 +411,12 @@ private struct TaskList: View {
             SectionHeader(title: tr("已逾期", "Overdue"), tint: .red)
             rows(overdue)
         }
-        if !due.isEmpty {
+        if !due.isEmpty || !doneOnTimeline.isEmpty {
             if !overdue.isEmpty { SectionHeader(title: tr("今天", "Today")) }
             if showsTimeline {
                 // TodayTimeline's body is a ForEach, so a modifier on it would land on every row.
                 if overdue.isEmpty { Color.clear.frame(height: 6) }
-                TodayTimeline(tasks: due, now: now)
+                TodayTimeline(tasks: due + doneOnTimeline, now: now)
             } else {
                 rows(due)
             }

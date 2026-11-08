@@ -55,7 +55,7 @@ final class TaskStore {
     func add(_ input: ParsedInput) -> TaskItem? {
         let title = input.title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !title.isEmpty else { return nil }
-        let item = TaskItem(title: title, schedule: input.schedule, priority: input.priority, tags: input.tags)
+        let item = TaskItem(title: title, schedule: input.schedule, priority: input.priority, tags: input.tags, duration: input.duration)
         tasks.append(item)
         changed()
         return item
@@ -126,6 +126,28 @@ final class TaskStore {
         let snapshot = currentSnapshot
         schedule(id, day: Day(now, in: calendar).adding(days: 1))
         announce(tr("「\(task.title)」推迟到明天", "Moved “\(task.title)” to tomorrow"), undo: snapshot)
+    }
+
+    /// Moves a timed task to start at `start`, keeping its length (used to clear an overlap).
+    func startAfter(_ id: UUID, at start: Date) {
+        guard let task = task(id), task.hasTime else { return }
+        let snapshot = currentSnapshot
+        update(id) { $0.schedule = .time(start) }
+        announce(tr("「\(task.title)」顺延到 \(DateText.time(start))", "Moved “\(task.title)” to \(DateText.time(start))"), undo: snapshot)
+        changed()
+    }
+
+    /// Sets how long a task lasts (nil goes back to the default length).
+    func setDuration(_ id: UUID, minutes: Int?) {
+        let value = minutes.map { min(max($0, TaskItem.durationRange.lowerBound), TaskItem.durationRange.upperBound) }
+        guard let task = task(id), task.duration != value else { return }
+        update(id) { $0.duration = value }
+        changed()
+    }
+
+    func setColor(_ id: UUID, _ color: TaskColor?) {
+        update(id) { $0.color = color }
+        changed()
     }
 
     func setPriority(_ id: UUID, _ priority: Priority) {

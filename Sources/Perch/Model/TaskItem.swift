@@ -111,16 +111,26 @@ nonisolated struct TaskItem: Identifiable, Hashable, Sendable {
     var tags: [String] = []
     var createdAt = Date()
     var completedAt: Date?
+    /// How long a timed task lasts, in minutes. Nil means the default length.
+    var duration: Int?
+    /// A color picked by hand. Nil derives one from the first tag.
+    var color: TaskColor?
+
+    static let defaultDuration = 30
+    static let durationRange = 5...(24 * 60)
 
     var isDone: Bool { completedAt != nil }
     var hasTime: Bool { schedule?.time != nil }
+    var minutes: Int { duration ?? Self.defaultDuration }
+    /// When a timed task is over.
+    var end: Date? { schedule?.time.map { $0.addingTimeInterval(Double(minutes) * 60) } }
 
     func day(in calendar: Calendar) -> Day? { schedule?.day(in: calendar) }
 }
 
 extension TaskItem: Codable {
     private enum CodingKeys: String, CodingKey {
-        case id, title, day, at, priority, tags, createdAt, completedAt
+        case id, title, day, at, priority, tags, createdAt, completedAt, duration, color
         // Format used before floating days existed.
         case due, hasTime
     }
@@ -133,6 +143,8 @@ extension TaskItem: Codable {
         tags = try c.decodeIfPresent([String].self, forKey: .tags) ?? []
         createdAt = try c.decodeIfPresent(Date.self, forKey: .createdAt) ?? .now
         completedAt = try c.decodeIfPresent(Date.self, forKey: .completedAt)
+        duration = try c.decodeIfPresent(Int.self, forKey: .duration)
+        color = try? c.decodeIfPresent(TaskColor.self, forKey: .color)
 
         if let at = try c.decodeIfPresent(Date.self, forKey: .at) {
             schedule = .time(at)
@@ -158,7 +170,14 @@ extension TaskItem: Codable {
         try c.encode(tags, forKey: .tags)
         try c.encode(createdAt, forKey: .createdAt)
         try c.encodeIfPresent(completedAt, forKey: .completedAt)
+        try c.encodeIfPresent(duration, forKey: .duration)
+        try c.encodeIfPresent(color, forKey: .color)
     }
+}
+
+/// The timeline's palette: soft, slightly muted tones that read on light and dark glass.
+nonisolated enum TaskColor: String, Codable, CaseIterable, Sendable {
+    case coral, amber, sage, teal, sky, indigo, lavender, rose
 }
 
 nonisolated struct FocusSession: Codable, Hashable, Sendable {

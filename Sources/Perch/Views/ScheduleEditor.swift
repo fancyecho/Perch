@@ -11,12 +11,14 @@ struct ScheduleEditor: View {
     @Environment(PanelModel.self) private var model
     @State private var phrase = ""
     @State private var rejected = 0
-
-    private static let quickTimes = [(9, 0), (12, 0), (15, 0), (18, 0), (21, 0)]
+    @Namespace private var segments
 
     private var calendar: Calendar { settings.calendar }
-    private var schedule: Schedule? { store.task(taskID)?.schedule }
+    private var task: TaskItem? { store.task(taskID) }
+    private var schedule: Schedule? { task?.schedule }
+    private var minutes: Int { task?.minutes ?? TaskItem.defaultDuration }
     private var today: Day { Day(.now, in: calendar) }
+    private var nextMonday: Day { today.adding(days: 7 - today.mondayIndex) }
     private var day: Day? { schedule?.day(in: calendar) }
     private var clock: (hour: Int, minute: Int)? {
         schedule?.time.map {
@@ -26,75 +28,160 @@ struct ScheduleEditor: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 14) {
             header
-            quickDays
-            MonthCalendar(selection: dayBinding, calendar: calendar, locale: settings.locale)
-                .opacity(day == nil ? 0.5 : 1)
-                .frame(maxWidth: .infinity)
-            Divider()
-            timeSection
+            daySegments
+            WeekStrip(selection: day, today: today, tint: task?.tint.color ?? .accentColor, onPick: setDay)
+            timeCard
+            colorRow
             phraseField
         }
-        .padding(14)
-        .frame(width: 270)
+        .padding(16)
+        .frame(width: 288)
         .animation(.snappy(duration: 0.25), value: clock == nil)
     }
 
     // MARK: - Parts
 
+    /// The task's own capsule, then the day and the time span in words.
     private var header: some View {
-        HStack(alignment: .firstTextBaseline) {
-            Text(tr("日期与时间", "Date & Time"))
-                .font(.system(size: 13, weight: .semibold))
-            Spacer()
-            Text(DateText.dueLabel(schedule, now: .now) ?? tr("无日期", "No date"))
-                .font(.system(size: 12, weight: .medium).monospacedDigit())
-                .foregroundStyle(schedule == nil ? Color.secondary : Color.accentColor)
-                .contentTransition(.numericText())
-        }
-    }
-
-    private var quickDays: some View {
-        HStack(spacing: 6) {
-            chip(tr("今天", "Today"), isOn: day == today) { setDay(today) }
-            chip(tr("明天", "Tmrw"), isOn: day == today.adding(days: 1)) { setDay(today.adding(days: 1)) }
-            chip(tr("下周一", "Next Mon"), isOn: day == today.adding(days: 7 - today.mondayIndex)) {
-                setDay(today.adding(days: 7 - today.mondayIndex))
-            }
-            chip(tr("无日期", "No date"), isOn: schedule == nil) { apply(nil) }
-        }
-    }
-
-    private var timeSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
-                Label(tr("时间", "Time"), systemImage: "clock")
-                    .font(.system(size: 12, weight: .medium))
-                Spacer()
-                if clock != nil {
-                    DatePicker("", selection: timeBinding, displayedComponents: .hourAndMinute)
-                        .labelsHidden()
-                        .datePickerStyle(.stepperField)
-                        .environment(\.calendar, calendar)
-                        .environment(\.timeZone, calendar.timeZone)
-                        .environment(\.locale, settings.locale)
-                        .transition(.opacity.combined(with: .move(edge: .trailing)))
+        HStack(spacing: 11) {
+            if let task {
+                ZStack {
+                    Capsule().fill(LinearGradient(colors: [task.tint.color.mix(with: .white, by: 0.14), task.tint.color], startPoint: .top, endPoint: .bottom))
+                    switch task.glyph {
+                    case .symbol(let name): Image(systemName: name).font(.system(size: 11, weight: .semibold))
+                    case .text(let text): Text(text).font(.system(size: 12, weight: .semibold, design: .rounded))
+                    }
                 }
+                .foregroundStyle(.white)
+                .frame(width: 24, height: 34)
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                Text(dayTitle)
+                    .font(.system(size: 15, weight: .semibold))
+                Text(timeSummary)
+                    .font(.system(size: 12, weight: .regular).monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .contentTransition(.numericText())
+            }
+            .lineLimit(1)
+            Spacer(minLength: 0)
+        }
+    }
+
+    private var dayTitle: String {
+        guard let day else { return tr("未安排日期", "No date") }
+        let relative = DateText.relativeDay(day, now: .now)
+        let date = "\(DateText.monthDay(day)) \(DateText.weekday(day))"
+        return relative == DateText.monthDay(day) ? date : "\(relative) · \(date)"
+    }
+
+    private var timeSummary: String {
+        guard day != nil else { return tr("放在收件箱里，想到再安排", "Sits in the Inbox until you plan it") }
+        guard let task, let range = DateText.timeRange(task) else { return tr("全天 · 没有具体时间", "All day · no set time") }
+        return "\(range) · \(DateText.duration(task.minutes))"
+    }
+
+    private var daySegments: some View {
+        let choice: Int? = switch day {
+        case nil: 3
+        case today: 0
+        case today.adding(days: 1): 1
+        case nextMonday: 2
+        default: nil
+        }
+        return SegmentedPills(
+            labels: [tr("今天", "Today"), tr("明天", "Tomorrow"), tr("下周一", "Next Mon"), tr("无日期", "No date")],
+            selection: choice,
+            namespace: segments,
+            id: "day"
+        ) { index in
+            switch index {
+            case 0: setDay(today)
+            case 1: setDay(today.adding(days: 1))
+            case 2: setDay(nextMonday)
+            default: apply(nil)
+            }
+        }
+    }
+
+    /// Start, end and length together, behind one switch.
+    private var timeCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Label(tr("具体时间", "Set a time"), systemImage: "clock")
+                    .font(.system(size: 12.5, weight: .medium))
+                Spacer()
                 Toggle("", isOn: hasTimeBinding)
                     .labelsHidden()
                     .toggleStyle(.switch)
-                    .controlSize(.small)
+                    .controlSize(.mini)
             }
-            if let clock {
-                HStack(spacing: 4) {
-                    ForEach(Self.quickTimes, id: \.0) { hour, minute in
-                        chip(String(format: "%d:%02d", hour, minute), isOn: clock.hour == hour && clock.minute == minute, padding: 3) {
-                            setTime(hour: hour, minute: minute)
-                        }
-                    }
+            if clock != nil {
+                HStack(alignment: .bottom, spacing: 0) {
+                    timeBox(tr("开始", "Starts"), selection: timeBinding)
+                    Image(systemName: "arrow.right")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.tertiary)
+                        .frame(maxWidth: .infinity)
+                        .padding(.bottom, 6)
+                    timeBox(tr("结束", "Ends"), selection: endBinding)
                 }
                 .transition(.opacity.combined(with: .move(edge: .top)))
+                SegmentedPills(
+                    labels: DurationChoice.quick.map(shortDuration),
+                    selection: DurationChoice.quick.firstIndex(of: minutes),
+                    namespace: segments,
+                    id: "duration"
+                ) { index in
+                    withAnimation(.snappy) { store.setDuration(taskID, minutes: DurationChoice.quick[index]) }
+                }
+                .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+        .padding(12)
+        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.primary.opacity(0.045)))
+    }
+
+    private func timeBox(_ title: String, selection: Binding<Date>) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.system(size: 10.5, weight: .medium))
+                .foregroundStyle(.secondary)
+            DatePicker("", selection: selection, displayedComponents: .hourAndMinute)
+                .labelsHidden()
+                .datePickerStyle(.field)
+                .environment(\.calendar, calendar)
+                .environment(\.timeZone, calendar.timeZone)
+                .environment(\.locale, settings.locale)
+                .fixedSize()
+        }
+    }
+
+    /// Eight dots; the chosen one wears a ring. Choosing it again goes back to automatic.
+    private var colorRow: some View {
+        HStack(spacing: 0) {
+            Text(tr("颜色", "Color"))
+                .font(.system(size: 12.5, weight: .medium))
+            Spacer(minLength: 8)
+            HStack(spacing: 5) {
+                ForEach(TaskColor.allCases, id: \.self) { color in
+                    let isOn = task?.color == color
+                    let isAuto = task?.color == nil && task?.tint == color
+                    Button {
+                        withAnimation(.snappy) { store.setColor(taskID, isOn ? nil : color) }
+                    } label: {
+                        Circle()
+                            .fill(color.color)
+                            .frame(width: 14, height: 14)
+                            .padding(3)
+                            .overlay(Circle().strokeBorder(color.color.opacity(isOn ? 0.95 : isAuto ? 0.45 : 0), style: StrokeStyle(lineWidth: 1.5, dash: isAuto ? [2, 2] : [])))
+                            .contentShape(.circle)
+                    }
+                    .buttonStyle(.plain)
+                    .help(isAuto ? tr("\(color.title)（自动）", "\(color.title) (automatic)") : color.title)
+                }
             }
         }
     }
@@ -103,17 +190,17 @@ struct ScheduleEditor: View {
         HStack(spacing: 7) {
             Image(systemName: "text.cursor")
                 .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.tertiary)
             InputField(
                 text: $phrase,
-                placeholder: tr("或直接输入：后天下午3点", "Or type: fri 3pm"),
+                placeholder: tr("或直接输入：后天下午3点到5点", "Or type: fri 3-5pm"),
                 fontSize: 12,
                 onSubmit: applyPhrase
             )
         }
-        .padding(.horizontal, 9)
-        .padding(.vertical, 7)
-        .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(Color.primary.opacity(0.06)))
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.primary.opacity(0.045)))
         .keyframeAnimator(initialValue: 0.0, trigger: rejected) { content, x in
             content.offset(x: x)
         } keyframes: { _ in
@@ -125,30 +212,11 @@ struct ScheduleEditor: View {
         }
     }
 
-    private func chip(_ title: String, isOn: Bool, padding: CGFloat = 7, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Text(title)
-            .font(.system(size: 11, weight: isOn ? .semibold : .medium).monospacedDigit())
-            .lineLimit(1)
-            .fixedSize()
-            .padding(.horizontal, padding)
-            .padding(.vertical, 4)
-            .frame(maxWidth: .infinity)
-            .foregroundStyle(isOn ? Color.accentColor : .primary)
-            .background(Capsule().fill(isOn ? Color.accentColor.opacity(0.18) : Color.primary.opacity(0.06)))
-            .contentShape(.capsule)
-        }
-        .buttonStyle(.plain)
+    private func shortDuration(_ minutes: Int) -> String {
+        minutes < 60 ? tr("\(minutes)分", "\(minutes)m") : tr("\(minutes / 60)小时", "\(minutes / 60)h")
     }
 
     // MARK: - Bindings
-
-    private var dayBinding: Binding<Date> {
-        Binding(
-            get: { (day ?? today).date(hour: 12, minute: 0, in: calendar) },
-            set: { setDay(Day($0, in: calendar)) }
-        )
-    }
 
     private var timeBinding: Binding<Date> {
         Binding(
@@ -156,6 +224,21 @@ struct ScheduleEditor: View {
             set: { date in
                 let c = calendar.dateComponents([.hour, .minute], from: date)
                 setTime(hour: c.hour ?? 9, minute: c.minute ?? 0)
+            }
+        )
+    }
+
+    /// The end time; one before the start wraps to the next day, as an evening task running past midnight would.
+    private var endBinding: Binding<Date> {
+        Binding(
+            get: { store.task(taskID)?.end ?? .now },
+            set: { date in
+                guard let start = schedule?.time else { return }
+                let c = calendar.dateComponents([.hour, .minute], from: date)
+                let startC = calendar.dateComponents([.hour, .minute], from: start)
+                var length = ((c.hour ?? 0) * 60 + (c.minute ?? 0)) - ((startC.hour ?? 0) * 60 + (startC.minute ?? 0))
+                if length <= 0 { length += 24 * 60 }
+                withAnimation(.snappy) { store.setDuration(taskID, minutes: length) }
             }
         )
     }
@@ -206,6 +289,7 @@ struct ScheduleEditor: View {
             return
         }
         apply(schedule)
+        if let minutes = parsed.duration { store.setDuration(taskID, minutes: minutes) }
         phrase = ""
     }
 
@@ -220,47 +304,196 @@ struct ScheduleEditor: View {
     }
 }
 
-/// A borderless month calendar without AppKit's focus ring.
-private struct MonthCalendar: NSViewRepresentable {
-    @Binding var selection: Date
-    let calendar: Calendar
-    let locale: Locale
+/// One week at a time, Monday first: tap a day to move the task there, the arrows to page.
+/// Small dots under each day show what's already planned for it.
+private struct WeekStrip: View {
+    let selection: Day?
+    let today: Day
+    let tint: Color
+    let onPick: (Day) -> Void
 
-    func makeCoordinator() -> Coordinator { Coordinator(self) }
+    @Environment(TaskStore.self) private var store
+    @Environment(AppSettings.self) private var settings
+    @State private var weekOffset = 0
+    @State private var pageEdge: Edge = .trailing
 
-    func makeNSView(context: Context) -> NSDatePicker {
-        let picker = NSDatePicker()
-        picker.datePickerStyle = .clockAndCalendar
-        picker.datePickerElements = .yearMonthDay
-        picker.datePickerMode = .single
-        picker.isBordered = false
-        picker.isBezeled = false
-        picker.drawsBackground = false
-        picker.focusRingType = .none
-        picker.refusesFirstResponder = true
-        picker.target = context.coordinator
-        picker.action = #selector(Coordinator.changed(_:))
-        return picker
+    private var weekStart: Day {
+        let anchor = selection ?? today
+        return anchor.adding(days: -anchor.mondayIndex + weekOffset * 7)
     }
 
-    func updateNSView(_ picker: NSDatePicker, context: Context) {
-        context.coordinator.parent = self
-        picker.calendar = calendar
-        picker.timeZone = calendar.timeZone
-        picker.locale = locale
-        if picker.dateValue != selection { picker.dateValue = selection }
-    }
-
-    func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSDatePicker, context: Context) -> CGSize? {
-        nsView.fittingSize
-    }
-
-    final class Coordinator: NSObject {
-        var parent: MonthCalendar
-        init(_ parent: MonthCalendar) { self.parent = parent }
-
-        @objc func changed(_ sender: NSDatePicker) {
-            parent.selection = sender.dateValue
+    var body: some View {
+        let start = weekStart
+        let days = (0..<7).map { start.adding(days: $0) }
+        let planned = plannedColors(for: days)
+        VStack(spacing: 8) {
+            HStack(spacing: 4) {
+                Text(monthTitle(for: start.adding(days: 3)))
+                    .font(.system(size: 12.5, weight: .semibold))
+                    .contentTransition(.numericText())
+                if weekOffset != 0 {
+                    Button(tr("回到所选", "Back")) { page(to: 0) }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(tint)
+                        .transition(.opacity)
+                }
+                Spacer()
+                pageButton("chevron.left") { page(to: weekOffset - 1) }
+                pageButton("chevron.right") { page(to: weekOffset + 1) }
+            }
+            HStack(spacing: 0) {
+                ForEach(days, id: \.self) { day in
+                    DayCell(
+                        day: day,
+                        isSelected: day == selection,
+                        isToday: day == today,
+                        isPast: day < today,
+                        tint: tint,
+                        dots: planned[day] ?? []
+                    ) { onPick(day) }
+                }
+            }
+            .id(start)
+            .transition(.push(from: pageEdge))
         }
+        .clipped()
+        .onChange(of: selection) { weekOffset = 0 }
+    }
+
+    private func page(to offset: Int) {
+        pageEdge = offset > weekOffset ? .trailing : .leading
+        withAnimation(.snappy(duration: 0.3)) { weekOffset = offset }
+    }
+
+    private func pageButton(_ symbol: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 10, weight: .bold))
+                .foregroundStyle(.secondary)
+                .frame(width: 22, height: 22)
+                .background(Circle().fill(Color.primary.opacity(0.05)))
+                .contentShape(.circle)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func monthTitle(for day: Day) -> String {
+        if settings.isChinese { return "\(day.year)年\(day.month)月" }
+        let formatter = DateFormatter()
+        formatter.locale = settings.locale
+        formatter.setLocalizedDateFormatFromTemplate("MMMMyyyy")
+        return formatter.string(from: day.date(hour: 12, minute: 0, in: settings.calendar))
+    }
+
+    /// Up to three colors per day, one for each open task already there.
+    private func plannedColors(for days: [Day]) -> [Day: [Color]] {
+        let wanted = Set(days)
+        var result: [Day: [Color]] = [:]
+        for task in store.tasks where !task.isDone {
+            guard let day = task.day(in: settings.calendar), wanted.contains(day), (result[day]?.count ?? 0) < 3 else { continue }
+            result[day, default: []].append(task.tint.color)
+        }
+        return result
+    }
+}
+
+private struct DayCell: View {
+    let day: Day
+    let isSelected: Bool
+    let isToday: Bool
+    let isPast: Bool
+    let tint: Color
+    let dots: [Color]
+    let action: () -> Void
+
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 4) {
+                Text(weekdayLetter)
+                    .font(.system(size: 10.5, weight: .medium))
+                    .foregroundStyle(isToday && !isSelected ? AnyShapeStyle(tint) : AnyShapeStyle(.secondary))
+                ZStack {
+                    if isSelected {
+                        Circle().fill(tint)
+                    } else if isToday {
+                        Circle().strokeBorder(tint.opacity(0.7), lineWidth: 1.2)
+                    } else if hovering {
+                        Circle().fill(Color.primary.opacity(0.07))
+                    }
+                    Text("\(day.day)")
+                        .font(.system(size: 13, weight: isSelected || isToday ? .semibold : .regular, design: .rounded).monospacedDigit())
+                        .foregroundStyle(numberStyle)
+                }
+                .frame(width: 28, height: 28)
+                HStack(spacing: 2) {
+                    ForEach(dots.indices, id: \.self) { index in
+                        Circle().fill(dots[index]).frame(width: 4, height: 4)
+                    }
+                }
+                .frame(height: 4)
+            }
+            .frame(maxWidth: .infinity)
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .animation(.snappy(duration: 0.2), value: isSelected)
+        .accessibilityLabel(DateText.dayHeader(day, now: .now))
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+    }
+
+    private var weekdayLetter: String {
+        let name = DateText.weekday(day)
+        return AppSettings.shared.isChinese ? String(name.suffix(1)) : String(name.prefix(1))
+    }
+
+    private var numberStyle: AnyShapeStyle {
+        if isSelected { return AnyShapeStyle(.white) }
+        if isToday { return AnyShapeStyle(tint) }
+        return isPast ? AnyShapeStyle(.tertiary) : AnyShapeStyle(.primary)
+    }
+}
+
+/// A row of equal choices on one track, the chosen one lifted onto a sliding pill.
+struct SegmentedPills: View {
+    let labels: [String]
+    let selection: Int?
+    let namespace: Namespace.ID
+    let id: String
+    let action: (Int) -> Void
+
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        HStack(spacing: 0) {
+            ForEach(labels.indices, id: \.self) { index in
+                let isOn = selection == index
+                Button { action(index) } label: {
+                    Text(labels[index])
+                        .font(.system(size: 12, weight: isOn ? .semibold : .medium).monospacedDigit())
+                        .foregroundStyle(isOn ? Color.primary : Color.secondary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 5)
+                        .background {
+                            if isOn {
+                                Capsule()
+                                    .fill(colorScheme == .dark ? Color.white.opacity(0.16) : Color.white)
+                                    .shadow(color: .black.opacity(colorScheme == .dark ? 0 : 0.1), radius: 2, y: 1)
+                                    .matchedGeometryEffect(id: id, in: namespace)
+                            }
+                        }
+                        .contentShape(.capsule)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(2)
+        .background(Capsule().fill(Color.primary.opacity(0.06)))
+        .animation(.snappy(duration: 0.25), value: selection)
     }
 }

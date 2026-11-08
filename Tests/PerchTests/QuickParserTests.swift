@@ -40,6 +40,43 @@ struct QuickParserTests {
         #expect(wallClock(parsed.schedule, cal) == DateComponents(year: 2026, month: 10, day: 23, hour: 20, minute: 30))
     }
 
+    @Test func clockRangeSetsStartAndLength() {
+        let parsed = parse("明天 9:00-10:30 设计评审")
+        #expect(parsed.title == "设计评审")
+        #expect(wallClock(parsed.schedule, cal) == DateComponents(year: 2026, month: 10, day: 24, hour: 9, minute: 0))
+        #expect(parsed.duration == 90)
+    }
+
+    @Test func chineseRangeSharesItsPeriod() {
+        let parsed = parse("下午3点到5点半 写方案")
+        #expect(parsed.title == "写方案")
+        #expect(wallClock(parsed.schedule, cal) == DateComponents(year: 2026, month: 10, day: 23, hour: 15, minute: 0))
+        #expect(parsed.duration == 150)
+        #expect(parse("明天两点到四点 开会").duration == 120)
+    }
+
+    @Test func englishRange() {
+        let parsed = parse("Workshop tomorrow 3-5pm")
+        #expect(parsed.title == "Workshop")
+        #expect(wallClock(parsed.schedule, cal) == DateComponents(year: 2026, month: 10, day: 24, hour: 15, minute: 0))
+        #expect(parsed.duration == 120)
+        let morning = parse("Gym tomorrow 11-1pm")
+        #expect(wallClock(morning.schedule, cal)?.hour == 11)
+        #expect(morning.duration == 120)
+    }
+
+    @Test func lengthsOnTheirOwn() {
+        #expect(parse("明天下午3点 健身 1小时").duration == 60)
+        #expect(parse("读书 半小时").duration == 30)
+        #expect(parse("一个半小时 写代码").duration == 90)
+        #expect(parse("Run tomorrow 7am for 45 min").duration == 45)
+        #expect(parse("Deep work 1h30m").duration == 90)
+        #expect(parse("Deep work 1h30m").title == "Deep work")
+        // Relative times are not lengths.
+        #expect(parse("2小时后 喝水").duration == nil)
+        #expect(parse("call mom in 30 min").duration == nil)
+    }
+
     @Test func nextWeekdayIsAFloatingDay() {
         let parsed = parse("下周三 交报告")
         #expect(parsed.title == "交报告")
@@ -224,35 +261,102 @@ struct UpdaterTests {
 struct TimelineTests {
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
 
-    private func task(_ title: String, minutesFromNow: Double?) -> TaskItem {
-        TaskItem(title: title, schedule: minutesFromNow.map { .time(now.addingTimeInterval($0 * 60)) } ?? .day(Day(now, in: .current)))
+    private func task(_ title: String, minutesFromNow: Double?, lasting: Int? = nil, done: Bool = false) -> TaskItem {
+        var item = TaskItem(title: title, schedule: minutesFromNow.map { .time(now.addingTimeInterval($0 * 60)) } ?? .day(Day(now, in: .current)))
+        item.duration = lasting
+        if done { item.completedAt = now }
+        return item
     }
 
     private func describe(_ entries: [TodayTimeline.Entry]) -> [String] {
         entries.map { entry in
             switch entry.kind {
-            case .task(let task, let node): "\(task.title):\(node.above)/\(node.below)\(node.hint == nil ? "" : "*")"
-            case .now(let node): "now:\(node.above)/\(node.below)"
-            case .anytime(let node): "anytime:\(node.above)/\(node.below)"
+            case .task(let task, let node): "\(task.title):\(node.above.style)/\(node.below.style)\(node.hint == nil ? "" : "*")"
+            case .now(let node): "now:\(node.above.style)/\(node.below.style)"
+            case .gap(let minutes, _): "gap\(minutes)"
+            case .overlap(let overlap, _): "overlap\(overlap.minutes)"
+            case .anytime(let node): "anytime:\(node.above.style)/\(node.below.style)"
             }
         }
+    }
+
+    private func node(_ title: String, in entries: [TodayTimeline.Entry]) -> TimelineNode? {
+        for entry in entries {
+            if case .task(let task, let node) = entry.kind, task.title == title { return node }
+        }
+        return nil
     }
 
     @Test func ordersPastNowAheadThenAnytime() {
         let entries = TodayTimeline.entries(for: [
             task("later", minutesFromNow: 90),
             task("whenever", minutesFromNow: nil),
-            task("earlier", minutesFromNow: -30),
+            task("earlier", minutesFromNow: -60),
             task("soon", minutesFromNow: 20),
         ], now: now)
         #expect(describe(entries) == [
             "earlier:none/elapsed",
             "now:elapsed/ahead",
             "soon:ahead/ahead*",
+            "gap40",
             "later:ahead/anytime",
             "anytime:anytime/anytime",
             "whenever:anytime/none",
         ])
+    }
+
+    /// A task under way shows "now" by filling its capsule, so there is no separate marker.
+    @Test func runningTaskReplacesNowMarker() {
+        let entries = TodayTimeline.entries(for: [
+            task("meeting", minutesFromNow: -15, lasting: 60),
+            task("lunch", minutesFromNow: 60),
+        ], now: now)
+        #expect(describe(entries) == ["meeting:none/ahead*", "lunch:ahead/none"])
+        let meeting = node("meeting", in: entries)
+        #expect(meeting?.progress == 0.25)
+        #expect(meeting?.hint?.contains("45") == true)
+        #expect(node("lunch", in: entries)?.progress == 0)
+    }
+
+    @Test func doneTasksStayFilledAndLateOnesAreMarked() {
+        let entries = TodayTimeline.entries(for: [
+            task("done early", minutesFromNow: 30, done: true),
+            task("missed", minutesFromNow: -120),
+        ], now: now)
+        #expect(node("done early", in: entries)?.progress == 1)
+        #expect(node("missed", in: entries)?.isLate == true)
+        #expect(node("missed", in: entries)?.progress == 1)
+    }
+
+    /// 08:00–12:00 and 10:00–14:00: flagged between them, with the fix pointing at 12:00.
+    @Test func overlappingTasksAreFlagged() {
+        let entries = TodayTimeline.entries(for: [
+            task("course", minutesFromNow: 60, lasting: 240),
+            task("words", minutesFromNow: 180, lasting: 240),
+            task("done", minutesFromNow: 200, lasting: 30, done: true),
+        ], now: now)
+        #expect(describe(entries) == ["now:none/ahead", "course:ahead/conflict*", "overlap120", "words:conflict/ahead", "done:ahead/none"])
+        if case .overlap(let overlap, _) = entries[2].kind {
+            #expect(overlap.freeAt == now.addingTimeInterval(300 * 60))
+            #expect(overlap.otherTitle == "course")
+        }
+    }
+
+    @Test func clearingAnOverlapKeepsTheLength() throws {
+        let file = FileManager.default.temporaryDirectory.appending(path: "perch-overlap-\(UUID()).json")
+        let store = TaskStore(fileURL: file)
+        let item = try #require(store.add(ParsedInput(title: "words", schedule: .time(now), duration: 240)))
+        store.startAfter(item.id, at: now.addingTimeInterval(7200))
+        #expect(store.task(item.id)?.schedule?.time == now.addingTimeInterval(7200))
+        #expect(store.task(item.id)?.minutes == 240)
+        store.undo()
+        #expect(store.task(item.id)?.schedule?.time == now)
+    }
+
+    @Test func capsulesGrowWithLength() {
+        #expect(TimelineMetrics.capsuleHeight(minutes: 15) == TimelineMetrics.capsuleWidth)
+        #expect(TimelineMetrics.capsuleHeight(minutes: 60) > TimelineMetrics.capsuleHeight(minutes: 30))
+        #expect(TimelineMetrics.capsuleHeight(minutes: 600) == TimelineMetrics.capsuleHeight(minutes: 900))
     }
 
     @Test func untimedOnlyStartsAtNow() {
@@ -261,8 +365,53 @@ struct TimelineTests {
     }
 
     @Test func allPastEndsAtNow() {
-        let entries = TodayTimeline.entries(for: [task("a", minutesFromNow: -60), task("b", minutesFromNow: -5)], now: now)
+        let entries = TodayTimeline.entries(for: [task("a", minutesFromNow: -90), task("b", minutesFromNow: -45)], now: now)
         #expect(describe(entries) == ["a:none/elapsed", "b:elapsed/elapsed", "now:elapsed/none"])
+    }
+}
+
+struct TaskAppearanceTests {
+    private func symbol(_ title: String) -> String? { TaskTopic.match(title)?.symbol }
+
+    @Test func topicsComeFromTitleWords() {
+        #expect(symbol("明天下午跑步") == "figure.run")
+        #expect(symbol("吃药") == "pills.fill")
+        #expect(symbol("Team lunch") == "fork.knife")
+        #expect(symbol("Weekly meeting") == "video.fill")
+        #expect(symbol("Get ready") == nil)
+    }
+
+    @Test func studyTasksAreRecognized() {
+        #expect(symbol("背单词") == "character.book.closed.fill")
+        #expect(symbol("背 GRE 单词 200 个") == "character.book.closed.fill")
+        #expect(symbol("880做完线代") == "pencil.and.list.clipboard")
+        #expect(symbol("做两套数学真题") == "pencil.and.list.clipboard")
+        #expect(symbol("刷 LeetCode") == "pencil.and.list.clipboard")
+        #expect(symbol("听张宇的课") == "play.rectangle.fill")
+        #expect(symbol("看操作系统网课") == "play.rectangle.fill")
+        #expect(symbol("复习线代") == "function")
+        #expect(symbol("学习英语") == "textformat.abc")
+        #expect(symbol("学 Swift") == "graduationcap.fill")
+        #expect(symbol("练听力") == "headphones")
+        #expect(symbol("整理笔记") == "note.text")
+        #expect(symbol("背景调研") == nil)
+    }
+
+    @Test func untitledTopicsFallBackToTheFirstLetter() {
+        #expect(TaskItem(title: "整理思路").glyph == .symbol("sparkles"))
+        #expect(TaskItem(title: "quarterly OKRs").glyph == .text("Q"))
+        #expect(TaskItem(title: "3号线换乘").glyph == .text("号"))
+    }
+
+    @Test func everyTopicSymbolExists() {
+        for topic in TaskTopic.all {
+            #expect(NSImage(systemSymbolName: topic.symbol, accessibilityDescription: nil) != nil, "\(topic.symbol)")
+        }
+    }
+
+    @Test func tagColorIsStable() {
+        let a = TaskItem(title: "x", tags: ["工作"]), b = TaskItem(title: "y", tags: ["工作"])
+        #expect(a.tint == b.tint)
     }
 }
 

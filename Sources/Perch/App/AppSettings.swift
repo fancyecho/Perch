@@ -132,6 +132,21 @@ final class AppSettings {
         timeFormatter.string(from: date)
     }
 
+    /// True when times read "3:00 PM" rather than "15:00".
+    var uses12HourTime: Bool { timeFormatter.dateFormat.contains("a") }
+
+    /// A time split for tight columns: "3:00" and a separate "PM" to set smaller.
+    func timeParts(_ date: Date) -> (clock: String, period: String?) {
+        guard uses12HourTime else { return (formatTime(date), nil) }
+        let formatter = DateFormatter()
+        formatter.locale = locale
+        formatter.timeZone = calendar.timeZone
+        formatter.dateFormat = "h:mm"
+        let clock = formatter.string(from: date)
+        formatter.dateFormat = "a"
+        return (clock, formatter.string(from: date))
+    }
+
     private func rebuild() {
         switch language {
         case .chinese: isChinese = true

@@ -9,6 +9,10 @@ enum Pref {
     static let completionSound = "completionSound"
     static let celebrations = "celebrations"
     static let todayTimeline = "todayTimeline"
+    /// The color a task wears when nothing else picks one (a TaskColor raw value).
+    static let taskDefaultColor = "task.defaultColor"
+    /// Tasks recognized from their title (running, meetings, study…) take that kind's color.
+    static let taskTopicColors = "task.topicColors"
     static let chimeStyle = "chimeStyle"
     static let islandEnabled = "islandEnabled"
     /// The screenshot line along the top of the screen (adapted from Tendedero).
@@ -47,6 +51,8 @@ enum Pref {
             completionSound: true,
             celebrations: true,
             todayTimeline: true,
+            taskDefaultColor: TaskColor.coral.rawValue,
+            taskTopicColors: true,
             chimeStyle: ChimeStyle.perch.rawValue,
             islandEnabled: true,
             lineEnabled: true,

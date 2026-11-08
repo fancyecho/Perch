@@ -7,6 +7,8 @@ struct ParsedInput: Equatable {
     var tags: [String] = []
     /// True when the date or time came from the text rather than the default day.
     var hasExplicitDate = false
+    /// Minutes, from a range ("3-5pm") or a length ("1小时", "45 min").
+    var duration: Int?
 }
 
 /// Turns a single line like `明天下午3点 写周报 !! #工作` into a task.
@@ -49,6 +51,8 @@ enum QuickParser {
 
     private static let periodWords = "凌晨|早上|早晨|清晨|上午|中午|下午|傍晚|晚上|夜里|晚|早"
     private static let minuteSuffix = #"(?:(半)|(一刻)|(三刻)|(\d{1,2})\s*分?)?"#
+    private static let rangeSeparator = #"\s*(?:-|–|—|~|～|到|至)\s*"#
+    private static let hourNumber = #"(\d{1,2}|[零一二两三四五六七八九十]{1,3})"#
 
     static func parse(
         _ raw: String,
@@ -114,8 +118,41 @@ enum QuickParser {
             explicitDay = nextDay(month: nil, day: day, today: today)
         }
 
+        // Time ranges: "9:00-10:30", "下午3点到5点半", "3-5pm"
+        var end: (period: Period?, hour: Int, minute: Int)?
+        if let g = take("(\(periodWords))?\\s*(\\d{1,2})\\s*[:：]\\s*(\\d{2})\(rangeSeparator)(\(periodWords))?\\s*(\\d{1,2})\\s*[:：]\\s*(\\d{2})", from: &text),
+           let h1 = g.int(2), let h2 = g.int(5) {
+            period = Period(g[1]) ?? period
+            hour = h1
+            minute = g.int(3) ?? 0
+            isClockNotation = true
+            end = (Period(g[4]), h2, g.int(6) ?? 0)
+        } else if let g = take("(\(periodWords))?\\s*\(hourNumber)\\s*(?:点\\s*\(minuteSuffix))?\(rangeSeparator)(\(periodWords))?\\s*\(hourNumber)\\s*点\\s*\(minuteSuffix)", from: &text),
+                  let h1 = number(g[2]), let h2 = number(g[8]) {
+            period = Period(g[1]) ?? period
+            hour = h1
+            minute = minutes(g, from: 3)
+            end = (Period(g[7]), h2, minutes(g, from: 9))
+        } else if let g = take(#"(?:\bfrom\s+)?\b(\d{1,2})(?:[:.](\d{2}))?\s*(am|pm)?\s*(?:-|–|—|~|to)\s*(\d{1,2})(?:[:.](\d{2}))?\s*(am|pm)\b"#, from: &text),
+                  let h1 = g.int(1), let h2 = g.int(4) {
+            let endPeriod = Period(g[6])
+            // "3-5pm" shares the pm, unless that would put the start after the end ("11-1pm").
+            if let own = Period(g[3]) {
+                period = own
+            } else if let endPeriod, endPeriod.adjust(h1) <= endPeriod.adjust(h2) {
+                period = endPeriod
+            } else {
+                period = .morning
+            }
+            hour = h1
+            minute = g.int(2) ?? 0
+            end = (endPeriod, h2, g.int(5) ?? 0)
+        }
+
         // Time
-        if let g = take("(\(periodWords))?\\s*(\\d{1,2})\\s*[:：]\\s*(\\d{2})", from: &text) {
+        if hour != nil {
+            // already read as a range
+        } else if let g = take("(\(periodWords))?\\s*(\\d{1,2})\\s*[:：]\\s*(\\d{2})", from: &text) {
             period = Period(g[1]) ?? period
             hour = g.int(2)
             minute = g.int(3) ?? 0
@@ -124,7 +161,7 @@ enum QuickParser {
                     ?? take("(\(periodWords))\\s*([零一二两三四五六七八九十]{1,3})\\s*点\\s*\(minuteSuffix)", from: &text) {
             period = Period(g[1]) ?? period
             hour = number(g[2])
-            minute = g[3] != nil ? 30 : g[4] != nil ? 15 : g[5] != nil ? 45 : (g.int(6) ?? 0)
+            minute = minutes(g, from: 3)
         } else if let g = take(#"\b(\d{1,2})(?:[:.](\d{2}))?\s*(am|pm)\b"#, from: &text) {
             period = Period(g[3])
             hour = g.int(1)
@@ -160,10 +197,15 @@ enum QuickParser {
                     date = today.adding(days: 1).date(hour: h, minute: minute, in: cal)
                 }
                 result.schedule = .time(date)
+                if let end {
+                    result.duration = rangeLength(startHour: h, startMinute: minute, end: end, sharedPeriod: period)
+                }
             } else if let day {
                 result.schedule = .day(day)
             }
         }
+
+        if result.duration == nil { result.duration = takeDuration(from: &text) }
 
         result.hasExplicitDate = result.schedule != nil
         if result.schedule == nil, let defaultDay { result.schedule = .day(defaultDay) }
@@ -172,6 +214,45 @@ enum QuickParser {
     }
 
     // MARK: - Pieces
+
+    /// The minute part after 点: 半 / 一刻 / 三刻 / digits, in four groups starting at `index`.
+    private static func minutes(_ g: Groups, from index: Int) -> Int {
+        g[index] != nil ? 30 : g[index + 1] != nil ? 15 : g[index + 2] != nil ? 45 : (g.int(index + 3) ?? 0)
+    }
+
+    /// Length of "start–end" in minutes. An end without its own period follows the start's;
+    /// an end that still lands before the start is read as later the same day ("11-1点").
+    private static func rangeLength(startHour: Int, startMinute: Int, end: (period: Period?, hour: Int, minute: Int), sharedPeriod: Period?) -> Int? {
+        guard end.hour <= 24, end.minute < 60 else { return nil }
+        let start = startHour * 60 + startMinute
+        var endHour = end.hour
+        if let period = end.period ?? sharedPeriod { endHour = period.adjust(endHour) }
+        var finish = endHour * 60 + end.minute
+        while finish <= start, finish + 12 * 60 <= start + 24 * 60 { finish += 12 * 60 }
+        let length = finish - start
+        return TaskItem.durationRange.contains(length) ? length : nil
+    }
+
+    /// A length on its own: "1小时", "一个半小时", "半小时", "45分钟", "for 1h30m", "90 min".
+    private static func takeDuration(from text: inout String) -> Int? {
+        var total: Double?
+        if let g = take(#"(\d+(?:\.\d+)?|[一两二三四五六七八九十]{1,3})\s*个?\s*(半)?\s*(?:小时|钟头)(?:\s*(\d{1,2})\s*分钟?)?(?!\s*[后以])"#, from: &text),
+           let hours = g[1].flatMap({ Double($0) ?? number($0).map(Double.init) }) {
+            total = hours * 60 + (g[2] != nil ? 30 : 0) + Double(g.int(3) ?? 0)
+        } else if take(#"半\s*个?\s*(?:小时|钟头)(?!\s*[后以])"#, from: &text) != nil {
+            total = 30
+        } else if let g = take(#"(\d{1,3})\s*分钟(?!\s*[后以])"#, from: &text), let m = g.int(1) {
+            total = Double(m)
+        } else if let g = take(#"\b(?:for\s+)?(\d+(?:\.\d+)?)\s*(?:h|hrs?|hours?)(?:\s*(\d{1,2})\s*(?:m|mins?|minutes?))?\b"#, from: &text),
+                  let hours = g[1].flatMap(Double.init) {
+            total = hours * 60 + Double(g.int(2) ?? 0)
+        } else if let g = take(#"\b(?:for\s+)?(\d{1,3})\s*(?:m|mins?|minutes?)\b"#, from: &text), let m = g.int(1) {
+            total = Double(m)
+        }
+        guard let total else { return nil }
+        let minutes = Int(total.rounded())
+        return TaskItem.durationRange.contains(minutes) ? minutes : nil
+    }
 
     private static func takePriority(from text: inout String) -> Priority {
         if let g = take(#"(?<=\s)[pP]([1-3])(?=\s)"#, from: &text) {

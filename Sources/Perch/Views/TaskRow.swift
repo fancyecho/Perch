@@ -22,6 +22,8 @@ struct TaskRow: View {
     @State private var draft = ""
     @State private var editorFocusRequest = 0
     @State private var editingSchedule = false
+    @AppStorage(Pref.taskDefaultColor) private var defaultColor = TaskColor.coral.rawValue
+    @AppStorage(Pref.taskTopicColors) private var topicColors = true
 
     private var offset: CGFloat { (swipe.rowID == task.id ? swipe.offset : 0) + dragOffset }
     private var isChecked: Bool { task.isDone || completing }
@@ -33,10 +35,11 @@ struct TaskRow: View {
             content
                 .offset(x: offset)
         }
-        .background {
-            if let timeline { TimelineTrack(node: timeline, nodeRadius: 12) }
-        }
         .clipShape(.rect(cornerRadius: 10, style: .continuous))
+        // Outside the clip, so the line can bridge the gap to the next row.
+        .background {
+            if let timeline { TimelineTrack(node: timeline) }
+        }
         .contentShape(.rect)
         .onHover { hovering in
             withAnimation(.easeOut(duration: 0.12)) { self.hovering = hovering }
@@ -49,34 +52,118 @@ struct TaskRow: View {
 
     // MARK: - Content
 
+    @ViewBuilder
     private var content: some View {
-        HStack(spacing: style == .compact ? 6 : 8) {
-            if let timeline {
-                TimelineLabel(node: timeline)
-                    .contentShape(.rect)
-                    .onTapGesture { if style == .regular && !isChecked { editingSchedule = true } }
+        if let timeline {
+            timelineContent(timeline)
+        } else {
+            listContent
+        }
+    }
+
+    /// On the Today timeline: time column, capsule, then the text, with the checkbox at the end.
+    private func timelineContent(_ node: TimelineNode) -> some View {
+        HStack(spacing: TimelineMetrics.spacing) {
+            TimelineTimes(node: node)
+                .contentShape(.rect)
+                .onTapGesture { if !isChecked { editingSchedule = true } }
+            TimelineCapsule(
+                tint: task.tint.color,
+                glyph: task.glyph,
+                progress: isChecked ? 1 : node.progress,
+                height: node.height,
+                reveal: node.reveal.fill
+            )
+            .padding(.trailing, 2)
+
+            VStack(alignment: .leading, spacing: 2) {
+                if let detail = node.detail {
+                    Text(detail)
+                        .font(.system(size: 11, weight: .medium).monospacedDigit())
+                        .foregroundStyle(detailColor(node))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.85)
+                        .contentTransition(.numericText())
+                }
+                title(weight: .medium, size: 13.5)
+                tagLine
             }
+
+            Spacer(minLength: 4)
+
+            let showsButton = (hovering && !isChecked && !isEditing) || editingSchedule
+            rescheduleButton
+                .opacity(showsButton ? 1 : 0)
+                .allowsHitTesting(showsButton)
+            CheckCircle(isOn: isChecked, tint: checkTint, size: 20, action: toggle)
+        }
+        .padding(.vertical, 7)
+        .padding(.horizontal, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color.primary.opacity(hovering || offset != 0 ? 0.035 : 0))
+        }
+    }
+
+    private func detailColor(_ node: TimelineNode) -> Color {
+        // Lateness shows once, on the start time in the column.
+        if isChecked || node.isLate { return .secondary }
+        if node.hint != nil { return task.tint.color }
+        return .secondary
+    }
+
+    /// High-priority tasks keep their flag color on the checkbox; the rest wear the task's own.
+    private var checkTint: Color {
+        task.priority == .none ? task.tint.color : task.priority.tint
+    }
+
+    @ViewBuilder
+    private var tagLine: some View {
+        if !task.tags.isEmpty || isFocusTask {
+            HStack(spacing: 8) {
+                if isFocusTask {
+                    Label(tr("专注中", "Focusing"), systemImage: "scope")
+                        .foregroundStyle(Color.accentColor)
+                }
+                ForEach(task.tags, id: \.self) { tag in
+                    Text("#\(tag)").foregroundStyle(task.tint.color)
+                }
+            }
+            .font(.system(size: 11))
+            .labelStyle(CompactLabelStyle())
+            .lineLimit(1)
+        }
+    }
+
+    @ViewBuilder
+    private func title(weight: Font.Weight, size: CGFloat) -> some View {
+        if isEditing {
+            InputField(
+                text: $draft,
+                placeholder: tr("任务", "Task"),
+                focusRequest: editorFocusRequest,
+                focusOnAppear: true,
+                onSubmit: { _ in commitEdit() },
+                onCancel: { isEditing = false },
+                onFocusChange: { focused in if !focused { commitEdit() } }
+            )
+        } else {
+            Text(task.title)
+                .font(.system(size: size, weight: isFocusTask ? .semibold : weight))
+                .strikethrough(isChecked, color: .secondary)
+                .foregroundStyle(isChecked ? .secondary : .primary)
+                .lineLimit(style == .compact ? 1 : 2)
+                .onTapGesture(count: 2, perform: beginEditing)
+        }
+    }
+
+    private var listContent: some View {
+        HStack(spacing: style == .compact ? 6 : 8) {
             CheckCircle(isOn: isChecked, tint: task.priority.tint, size: style == .compact ? 16 : 18, action: toggle)
 
             VStack(alignment: .leading, spacing: 2) {
-                if isEditing {
-                    InputField(
-                        text: $draft,
-                        placeholder: tr("任务", "Task"),
-                        focusRequest: editorFocusRequest,
-                        focusOnAppear: true,
-                        onSubmit: { _ in commitEdit() },
-                        onCancel: { isEditing = false },
-                        onFocusChange: { focused in if !focused { commitEdit() } }
-                    )
-                } else {
-                    Text(task.title)
-                        .font(.system(size: 13, weight: isFocusTask ? .semibold : .regular))
-                        .strikethrough(isChecked, color: .secondary)
-                        .foregroundStyle(isChecked ? .secondary : .primary)
-                        .lineLimit(style == .compact ? 1 : 2)
-                        .onTapGesture(count: 2, perform: beginEditing)
-                }
+                title(weight: .regular, size: 13)
                 if style == .regular { metadata }
             }
 
@@ -109,14 +196,13 @@ struct TaskRow: View {
     @ViewBuilder
     private var metadata: some View {
         let dueLabel = DateText.dueLabel(task, now: now)
-        if (dueLabel != nil && timeline == nil) || !task.tags.isEmpty || isFocusTask {
+        if dueLabel != nil || !task.tags.isEmpty || isFocusTask {
             HStack(spacing: 8) {
                 if isFocusTask {
                     Label(tr("专注中", "Focusing"), systemImage: "scope")
                         .foregroundStyle(Color.accentColor)
                 }
-                if timeline == nil,
-                   let dueLabel = showsDay ? dueLabel : task.schedule?.time.map(DateText.time),
+                if let dueLabel = showsDay ? dueLabel : task.schedule?.time.map(DateText.time),
                    task.hasTime || (showsDay && !DateText.isDueToday(task, now: now)) {
                     Button { editingSchedule = true } label: {
                         Label(dueLabel, systemImage: task.hasTime ? "clock" : "calendar")
@@ -271,6 +357,34 @@ struct TaskMenu: View {
             Button(tr("修改日期和时间…", "Change Date & Time…"), action: onSchedule)
             Divider()
             Menu(tr("日期", "Date")) { ScheduleMenuItems(task: task) }
+            if task.hasTime {
+                Menu(tr("时长", "Duration")) {
+                    ForEach(DurationChoice.menu, id: \.self) { minutes in
+                        Toggle(DateText.duration(minutes), isOn: Binding(
+                            get: { task.minutes == minutes },
+                            set: { _ in withAnimation(.snappy) { store.setDuration(task.id, minutes: minutes) } }
+                        ))
+                    }
+                }
+            }
+            Menu(tr("颜色", "Color")) {
+                Toggle(tr("自动", "Automatic"), isOn: Binding(
+                    get: { task.color == nil },
+                    set: { _ in withAnimation(.snappy) { store.setColor(task.id, nil) } }
+                ))
+                Divider()
+                ForEach(TaskColor.allCases, id: \.self) { color in
+                    Button {
+                        withAnimation(.snappy) { store.setColor(task.id, color) }
+                    } label: {
+                        Label {
+                            Text(color.title)
+                        } icon: {
+                            Image(nsImage: color.swatch)
+                        }
+                    }
+                }
+            }
             Menu(tr("优先级", "Priority")) {
                 ForEach(Priority.allCases.reversed(), id: \.self) { priority in
                     Toggle(priority.title, isOn: Binding(
@@ -283,4 +397,9 @@ struct TaskMenu: View {
         Divider()
         Button(tr("删除", "Delete"), role: .destructive) { withAnimation(.snappy) { store.delete(task.id) } }
     }
+}
+
+enum DurationChoice {
+    static let quick = [15, 30, 45, 60, 120]
+    static let menu = [15, 30, 45, 60, 90, 120, 180]
 }
