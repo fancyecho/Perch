@@ -33,6 +33,8 @@ struct TimelineNode: Equatable {
     /// How much of the capsule is filled: the share of the task's time already passed.
     var progress: Double = 0
     var height: CGFloat = TimelineMetrics.capsuleWidth
+    /// Finished: folded to one quiet line with a small dot on the timeline.
+    var isCollapsed = false
     var above = TimelineSegment.none
     var below = TimelineSegment.none
     /// Position in the list.
@@ -57,6 +59,8 @@ enum TimelineMetrics {
     /// Room for "10:00", or "10:00 AM" with a small AM.
     static var labelWidth: CGFloat { AppSettings.shared.uses12HourTime ? 46 : 36 }
     static let capsuleWidth: CGFloat = 30
+    /// A finished task's capsule, folded down to a dot.
+    static let collapsedSize: CGFloat = 20
     static let spacing: CGFloat = 8
     /// Row padding + time column + spacing + half the capsule.
     static var lineX: CGFloat { 8 + labelWidth + spacing + capsuleWidth / 2 }
@@ -297,6 +301,13 @@ struct TodayTimeline: View {
                     }
                     let range = "\(DateText.time(start)) – \(DateText.time(end))"
                     node.detail = "\(range) · \(node.hint ?? DateText.duration(task.minutes))"
+                    if task.isDone {
+                        // Done: it keeps its place in the day but stops taking up the room of its hours.
+                        node.isCollapsed = true
+                        node.height = TimelineMetrics.collapsedSize
+                        node.end = nil
+                        node.detail = range
+                    }
                 } else {
                     node.height = TimelineMetrics.capsuleWidth
                 }
@@ -368,8 +379,8 @@ struct TimelineTimes: View {
     var body: some View {
         VStack(alignment: .trailing, spacing: 0) {
             if let start = node.start {
-                time(start, size: 11, weight: .medium)
-                    .foregroundStyle(node.isLate ? AnyShapeStyle(Color.red.opacity(0.85)) : AnyShapeStyle(.secondary))
+                time(start, size: node.isCollapsed ? 10.5 : 11, weight: node.isCollapsed ? .regular : .medium)
+                    .foregroundStyle(node.isLate ? AnyShapeStyle(Color.red.opacity(0.85)) : node.isCollapsed ? AnyShapeStyle(.tertiary) : AnyShapeStyle(.secondary))
                     .padding(.top, node.end == nil ? 0 : 2)
             }
             if let end = node.end {
@@ -407,6 +418,7 @@ struct TimelineCapsule: View {
     let reveal: TimelineNode.Window
     /// Following a finger (a swipe in progress): the fill keeps up instead of easing slowly.
     var interactive = false
+    var width: CGFloat = TimelineMetrics.capsuleWidth
 
     @State private var appeared = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -416,7 +428,6 @@ struct TimelineCapsule: View {
 
     var body: some View {
         let shown = appeared ? progress : 0
-        let width = TimelineMetrics.capsuleWidth
         ZStack {
             Capsule(style: .circular).fill(tint.opacity(colorScheme == .dark ? 0.2 : 0.14))
             Capsule(style: .circular).strokeBorder(tint.opacity(0.28), lineWidth: 0.6)
@@ -450,6 +461,7 @@ struct TimelineCapsule: View {
         .animation(interactive ? .spring(duration: 0.22, bounce: 0) : .easeInOut(duration: 0.8), value: progress)
         .animation(.spring(duration: 0.3, bounce: 0.3), value: glyph)
         .animation(.spring(duration: 0.45, bounce: 0.2), value: height)
+        .animation(.spring(duration: 0.45, bounce: 0.2), value: width)
         .onAppear {
             guard !appeared else { return }
             if reduceMotion || progress == 0 {
@@ -476,10 +488,10 @@ struct TimelineCapsule: View {
         switch glyph {
         case .symbol(let name):
             Image(systemName: name)
-                .font(.system(size: 12, weight: .semibold))
+                .font(.system(size: width < TimelineMetrics.capsuleWidth ? 9 : 12, weight: .semibold))
         case .text(let text):
             Text(text)
-                .font(.system(size: 13, weight: .semibold, design: .rounded))
+                .font(.system(size: width < TimelineMetrics.capsuleWidth ? 10 : 13, weight: .semibold, design: .rounded))
         }
     }
 }

@@ -82,8 +82,10 @@ struct TaskRow: View {
                 progress: isChecked ? 1 : completing ? max(node.progress, swipeFraction) : node.progress,
                 height: node.height,
                 reveal: node.reveal.fill,
-                interactive: offset != 0
+                interactive: offset != 0,
+                width: node.isCollapsed ? TimelineMetrics.collapsedSize : TimelineMetrics.capsuleWidth
             )
+            .frame(width: TimelineMetrics.capsuleWidth)
             .opacity(offset < 0 ? 1 - 0.45 * swipeFraction : 1)
             .scaleEffect(offset < 0 ? 1 - 0.06 * swipeFraction : 1)
             .padding(.trailing, 2)
@@ -96,7 +98,7 @@ struct TaskRow: View {
             }
             .clipShape(.rect(cornerRadius: 10, style: .continuous))
         }
-        .padding(.vertical, 7)
+        .padding(.vertical, node.isCollapsed ? 3 : 7)
         .padding(.horizontal, 8)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background {
@@ -130,17 +132,10 @@ struct TaskRow: View {
 
     private func timelineCard(_ node: TimelineNode) -> some View {
         HStack(spacing: TimelineMetrics.spacing) {
-            VStack(alignment: .leading, spacing: 2) {
-                if let detail = node.detail {
-                    Text(detail)
-                        .font(.system(size: 11, weight: .medium).monospacedDigit())
-                        .foregroundStyle(detailColor(node))
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.85)
-                        .contentTransition(.numericText())
-                }
-                title(weight: .medium, size: 13.5)
-                tagLine
+            if node.isCollapsed {
+                collapsedText(node)
+            } else {
+                expandedText(node)
             }
 
             Spacer(minLength: 4)
@@ -149,10 +144,47 @@ struct TaskRow: View {
             rescheduleButton
                 .opacity(showsButton ? 1 : 0)
                 .allowsHitTesting(showsButton)
-            CheckCircle(isOn: isChecked, tint: checkTint, size: 20, action: toggle)
+                .frame(width: node.isCollapsed ? 0 : nil)
+            CheckCircle(isOn: isChecked, tint: checkTint, size: node.isCollapsed ? 16 : 20, action: toggle)
+                .frame(width: 20)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(.rect)
+    }
+
+    /// A finished task in one line: the struck title, then its time in small print.
+    private func collapsedText(_ node: TimelineNode) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 7) {
+            Text(task.title)
+                .font(.system(size: 12.5))
+                .strikethrough(true)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .layoutPriority(1)
+            if let detail = node.detail {
+                Text(detail)
+                    .font(.system(size: 10.5).monospacedDigit())
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+            }
+        }
+        .transition(.opacity)
+    }
+
+    private func expandedText(_ node: TimelineNode) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            if let detail = node.detail {
+                Text(detail)
+                    .font(.system(size: 11, weight: .medium).monospacedDigit())
+                    .foregroundStyle(detailColor(node))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
+                    .contentTransition(.numericText())
+            }
+            title(weight: .medium, size: 13.5)
+            tagLine
+        }
+        .transition(.opacity)
     }
 
     private func detailColor(_ node: TimelineNode) -> Color {

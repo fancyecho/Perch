@@ -324,6 +324,10 @@ struct TimelineTests {
             task("missed", minutesFromNow: -120),
         ], now: now)
         #expect(node("done early", in: entries)?.progress == 1)
+        // Finished tasks fold down to a dot and a single line.
+        #expect(node("done early", in: entries)?.isCollapsed == true)
+        #expect(node("done early", in: entries)?.height == TimelineMetrics.collapsedSize)
+        #expect(node("missed", in: entries)?.isCollapsed == false)
         #expect(node("missed", in: entries)?.isLate == true)
         #expect(node("missed", in: entries)?.progress == 1)
     }
