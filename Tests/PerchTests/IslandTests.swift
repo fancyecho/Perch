@@ -229,4 +229,15 @@ struct TaskCapsuleTests {
         #expect(model.cardTop == 40)
         #expect(model.cardSize == IslandModel.panelSize)
     }
+
+    /// Opened from under the status page, the panel used to hang past the window's bottom edge,
+    /// hiding its last rows; it now always fits, whatever it was pinned to.
+    @Test func openPanelNeverHangsOutOfTheWindow() {
+        model.showsStatusDetail = true
+        model.page = .status
+        model.isExpanded = true
+        model.pinnedCardTop = model.cardTop
+        model.cardMode = .panel
+        #expect(model.cardTop + IslandModel.panelSize.height <= model.windowSize.height - IslandModel.windowMargin)
+    }
 }

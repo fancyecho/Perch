@@ -65,7 +65,7 @@ struct FocusPage: View {
             .padding(.top, 4)
             .padding(.bottom, 60)
         }
-        .scrollIndicators(.never)
+        .slimScrollIndicator()
     }
 
     private func enabledBinding(_ id: UUID) -> Binding<Bool> {

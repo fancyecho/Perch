@@ -29,17 +29,8 @@ enum SettingsTab: Int, CaseIterable {
         }
     }
 
-    /// Each page is as tall as its content, so the window resizes as the tabs switch.
-    var height: CGFloat {
-        switch self {
-        case .general: 760
-        case .island: 720
-        case .tasks: 720
-        case .focus: 640
-        case .line: 600
-        case .help: 600
-        }
-    }
+    /// Every page is the same size, so the window holds still as the tabs switch; longer pages scroll.
+    static let pageSize = CGSize(width: 540, height: 620)
 }
 
 struct SettingsPane: View {
@@ -57,7 +48,8 @@ struct SettingsPane: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 520, height: tab.height)
+        .scrollIndicators(.automatic)
+        .frame(width: SettingsTab.pageSize.width, height: SettingsTab.pageSize.height)
     }
 }
 

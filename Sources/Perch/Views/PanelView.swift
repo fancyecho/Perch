@@ -386,7 +386,7 @@ private struct TaskList: View {
             .padding(.horizontal, 8)
             .padding(.bottom, 60)
         }
-        .scrollIndicators(.never)
+        .slimScrollIndicator()
         .id(tab)
         .transition(.opacity)
     }

@@ -333,7 +333,10 @@ final class IslandModel {
     /// Just under whatever the island shows, so it rides down when the island drops a banner or
     /// opens, and back up after; an open panel stays where it opened.
     var cardTop: CGFloat {
-        pinnedCardTop ?? layout(for: state, hovering: false).height + Self.capsuleGap
+        let top = pinnedCardTop ?? layout(for: state, hovering: false).height + Self.capsuleGap
+        // The open panel always fits inside the window, so none of it is cut off.
+        guard cardMode == .panel else { return top }
+        return min(top, windowSize.height - Self.windowMargin - Self.panelSize.height)
     }
 
     /// As wide as the island at rest, so the two read as one piece; a little bigger under the pointer.

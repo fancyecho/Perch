@@ -329,6 +329,8 @@ final class IslandController {
                     model.inlineLevel = nil
                 }
             }
+            // Read only now: taken while the island was still open (the player, the status page),
+            // it pinned the panel so low that its last rows fell off the bottom of the window.
             let top = model.cardTop
             withAnimation(PanelController.morph) {
                 model.pinnedCardTop = top
@@ -936,6 +938,8 @@ final class IslandController {
 
     private func handleSwipe(_ event: NSEvent) -> NSEvent? {
         guard event.window === panel else { return event }
+        // While the island is the task list, scrolling over it scrolls the list.
+        guard !model.isShowingTasks else { return event }
         guard event.hasPreciseScrollingDeltas else { return handleWheel(event) }
         if event.phase.contains(.began) {
             swipeTravel = .zero

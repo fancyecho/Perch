@@ -296,3 +296,75 @@ struct Chip: View {
             .background(Capsule().fill(tint.opacity(0.14)))
     }
 }
+
+/// A thin capsule along the right edge in place of the system scroller: faint while the pointer
+/// is over a list that has more to show, clearer while scrolling, gone shortly after.
+struct SlimScrollIndicator: ViewModifier {
+    private struct Metrics: Equatable {
+        var offset: CGFloat = 0
+        var content: CGFloat = 0
+        var container: CGFloat = 0
+    }
+
+    @State private var metrics = Metrics()
+    @State private var hovering = false
+    @State private var scrolling = false
+    @State private var settle: Task<Void, Never>?
+
+    func body(content: Content) -> some View {
+        content
+            .scrollIndicators(.never)
+            .onScrollGeometryChange(for: Metrics.self) { geometry in
+                Metrics(
+                    offset: geometry.contentOffset.y + geometry.contentInsets.top,
+                    content: geometry.contentSize.height,
+                    container: geometry.containerSize.height
+                )
+            } action: { old, new in
+                metrics = new
+                guard old.content > 0, abs(old.offset - new.offset) > 0.5 else { return }
+                flash()
+            }
+            .onHover { inside in
+                withAnimation(.easeOut(duration: 0.2)) { hovering = inside }
+            }
+            .overlay(alignment: .topTrailing) { thumb }
+    }
+
+    @ViewBuilder
+    private var thumb: some View {
+        let track = metrics.container - 12
+        let scrollable = metrics.content - metrics.container
+        if scrollable > 1, track > 0 {
+            let length = max(28, track * metrics.container / metrics.content)
+            // Squashes a little past either end, as the content rubber-bands.
+            let progress = metrics.offset / scrollable
+            let overshoot = progress < 0 ? -progress * scrollable : progress > 1 ? (progress - 1) * scrollable : 0
+            let shown = max(12, length - overshoot)
+            let y = min(max(progress, 0), 1) * (track - shown)
+            Capsule(style: .circular)
+                .fill(Color.primary.opacity(scrolling ? 0.32 : 0.16))
+                .frame(width: scrolling ? 4 : 3, height: shown)
+                .offset(x: -3, y: 6 + y)
+                .opacity(scrolling || hovering ? 1 : 0)
+                .animation(.easeOut(duration: 0.18), value: scrolling)
+                .animation(.easeOut(duration: 0.25), value: hovering)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+        }
+    }
+
+    private func flash() {
+        if !scrolling { scrolling = true }
+        settle?.cancel()
+        settle = Task {
+            try? await Task.sleep(for: .milliseconds(900))
+            guard !Task.isCancelled else { return }
+            scrolling = false
+        }
+    }
+}
+
+extension View {
+    func slimScrollIndicator() -> some View { modifier(SlimScrollIndicator()) }
+}
