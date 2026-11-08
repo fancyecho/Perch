@@ -405,6 +405,8 @@ struct TimelineCapsule: View {
     let progress: Double
     let height: CGFloat
     let reveal: TimelineNode.Window
+    /// Following a finger (a swipe in progress): the fill keeps up instead of easing slowly.
+    var interactive = false
 
     @State private var appeared = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -445,7 +447,8 @@ struct TimelineCapsule: View {
         }
         .frame(width: width, height: height)
         .shadow(color: tint.opacity(shown > 0 ? 0.22 : 0), radius: 4, y: 2)
-        .animation(.easeInOut(duration: 0.8), value: progress)
+        .animation(interactive ? .spring(duration: 0.22, bounce: 0) : .easeInOut(duration: 0.8), value: progress)
+        .animation(.spring(duration: 0.3, bounce: 0.3), value: glyph)
         .animation(.spring(duration: 0.45, bounce: 0.2), value: height)
         .onAppear {
             guard !appeared else { return }

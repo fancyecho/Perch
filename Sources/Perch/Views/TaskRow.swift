@@ -30,10 +30,12 @@ struct TaskRow: View {
     private var isFocusTask: Bool { store.focus?.taskID == task.id }
 
     var body: some View {
+        // On the timeline only the text card slides (see timelineContent), so the capsule never
+        // leaves the line.
         ZStack(alignment: offset >= 0 ? .leading : .trailing) {
-            if offset != 0 { swipeReveal }
+            if offset != 0 && timeline == nil { swipeReveal }
             content
-                .offset(x: offset)
+                .offset(x: timeline == nil ? offset : 0)
         }
         .clipShape(.rect(cornerRadius: 10, style: .continuous))
         // Outside the clip, so the line can bridge the gap to the next row.
@@ -61,21 +63,73 @@ struct TaskRow: View {
         }
     }
 
+    /// How far a swipe has gone toward its threshold, 0…1, and which way.
+    private var swipeFraction: CGFloat { min(abs(offset) / SwipeTracker.threshold, 1) }
+
     /// On the Today timeline: time column, capsule, then the text, with the checkbox at the end.
+    /// A swipe moves only the text card: the time and capsule stay on the line, the capsule fills
+    /// as a right swipe nears "done" and fades as a left swipe nears "tomorrow".
     private func timelineContent(_ node: TimelineNode) -> some View {
-        HStack(spacing: TimelineMetrics.spacing) {
+        let completing = offset > 0
+        let armed = swipeFraction >= 1
+        return HStack(spacing: TimelineMetrics.spacing) {
             TimelineTimes(node: node)
                 .contentShape(.rect)
                 .onTapGesture { if !isChecked { editingSchedule = true } }
             TimelineCapsule(
                 tint: task.tint.color,
-                glyph: task.glyph,
-                progress: isChecked ? 1 : node.progress,
+                glyph: completing && armed ? .symbol("checkmark") : task.glyph,
+                progress: isChecked ? 1 : completing ? max(node.progress, swipeFraction) : node.progress,
                 height: node.height,
-                reveal: node.reveal.fill
+                reveal: node.reveal.fill,
+                interactive: offset != 0
             )
+            .opacity(offset < 0 ? 1 - 0.45 * swipeFraction : 1)
+            .scaleEffect(offset < 0 ? 1 - 0.06 * swipeFraction : 1)
             .padding(.trailing, 2)
 
+            ZStack(alignment: completing ? .leading : .trailing) {
+                if offset != 0 { timelineSwipeReveal(completing: completing, armed: armed) }
+                timelineCard(node)
+                    .offset(x: offset)
+                    .opacity(1 - 0.35 * swipeFraction)
+            }
+            .clipShape(.rect(cornerRadius: 10, style: .continuous))
+        }
+        .padding(.vertical, 7)
+        .padding(.horizontal, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color.primary.opacity(hovering || offset != 0 ? 0.035 : 0))
+        }
+    }
+
+    /// The pill that opens up behind the sliding card: next to the capsule for "done", in the
+    /// checkbox's place for "tomorrow".
+    private func timelineSwipeReveal(completing: Bool, armed: Bool) -> some View {
+        let width = max(abs(offset) - 8, 0)
+        let color = completing ? Color.green : Color.orange
+        return HStack(spacing: 4) {
+            Image(systemName: completing ? "checkmark" : "arrow.turn.down.right")
+                .font(.system(size: 11, weight: .bold))
+                .scaleEffect(armed ? 1.15 : 0.9)
+            if width > 70 {
+                Text(completing ? tr("完成", "Done") : tr("明天", "Tomorrow"))
+                    .font(.system(size: 11, weight: .semibold))
+                    .transition(.opacity)
+            }
+        }
+        .foregroundStyle(.white)
+        .frame(width: width, height: 28)
+        .background(Capsule(style: .circular).fill(color.opacity(armed ? 0.85 : 0.5)))
+        .opacity(width > 18 ? 1 : 0)
+        .animation(.spring(duration: 0.25, bounce: 0.5), value: armed)
+        .animation(.easeOut(duration: 0.12), value: width > 70)
+    }
+
+    private func timelineCard(_ node: TimelineNode) -> some View {
+        HStack(spacing: TimelineMetrics.spacing) {
             VStack(alignment: .leading, spacing: 2) {
                 if let detail = node.detail {
                     Text(detail)
@@ -97,13 +151,8 @@ struct TaskRow: View {
                 .allowsHitTesting(showsButton)
             CheckCircle(isOn: isChecked, tint: checkTint, size: 20, action: toggle)
         }
-        .padding(.vertical, 7)
-        .padding(.horizontal, 8)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background {
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(Color.primary.opacity(hovering || offset != 0 ? 0.035 : 0))
-        }
+        .contentShape(.rect)
     }
 
     private func detailColor(_ node: TimelineNode) -> Color {

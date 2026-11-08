@@ -93,6 +93,14 @@ final class SwipeTracker {
         return event
     }
 
+    #if DEBUG
+    /// Holds a row mid-swipe, for rendering that state in a check.
+    func hold(_ id: UUID, at offset: CGFloat) {
+        rowID = id
+        self.offset = offset
+    }
+    #endif
+
     static func rubberBand(_ x: CGFloat) -> CGFloat {
         let limit: CGFloat = 110
         let magnitude = abs(x)
