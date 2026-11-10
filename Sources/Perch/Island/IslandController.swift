@@ -157,7 +157,6 @@ final class IslandController {
         }
         taskPanel.settingsHandler = { [weak self] tab in self?.onOpenSettings?(tab) }
         model.settingsHandler = { [weak self] tab in self?.onOpenSettings?(tab) }
-        model.statusHandler = { [weak self] in self?.openStatus() }
         model.metricHandler = { [weak self] metric in
             guard let self, self.model.statusMetric != metric else { return }
             if self.preferences.haptics { Haptics.tick() }
@@ -484,7 +483,11 @@ final class IslandController {
         guard !model.isExpanded, !model.isShowingTasks, !(banner.dropsDown && model.cardMode == .panel),
               !model.isCurtained || banner.passesCurtain else { return }
         if model.banner?.kind == banner.kind {
-            model.banner = banner
+            if model.banner?.subject == banner.subject {
+                model.banner = banner
+            } else {
+                withAnimation(.smooth(duration: 0.3)) { model.banner = banner }
+            }
         } else {
             dwellTask?.cancel()
             withAnimation(Self.open) { model.banner = banner }
@@ -567,7 +570,9 @@ final class IslandController {
 
     private func deviceChanged(_ device: BluetoothDevice, connected: Bool) {
         guard preferences.devices else { return }
-        present(.device(device, connected: connected), for: .seconds(connected ? 4 : 2.6))
+        // Headphones report their batteries a second or two after connecting; leave time to read them.
+        let stay: Double = connected ? (device.battery.isEmpty ? 5 : 4) : 2.6
+        present(.device(device, connected: connected), for: .seconds(stay))
     }
 
     private func powerChanged(_ event: PowerEvent) {

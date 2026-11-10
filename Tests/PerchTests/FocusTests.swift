@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Testing
 @testable import Perch
@@ -192,11 +193,74 @@ struct AppleAudioModelTests {
     }
 
     @Test func namesGiveAwayWiredAndOtherOutputs() {
-        #expect(SystemVolume.symbol(forName: "EarPods")?.name == "earpods")
-        #expect(SystemVolume.symbol(forName: "Rick's AirPods Pro")?.name == "airpods.pro")
-        #expect(SystemVolume.symbol(forName: "AirPods 4")?.name == "airpods.gen4")
-        #expect(SystemVolume.symbol(forName: "Living Room HomePod mini")?.personal == false)
-        #expect(SystemVolume.symbol(forName: "USB Audio Device") == nil)
+        #expect(DeviceSymbol.look(forName: "EarPods")?.symbol == "earpods")
+        #expect(DeviceSymbol.look(forName: "Rick's AirPods Pro")?.symbol == "airpods.pro")
+        #expect(DeviceSymbol.look(forName: "AirPods 4")?.symbol == "airpods.gen4")
+        #expect(DeviceSymbol.look(forName: "Living Room HomePod mini")?.isPersonal == false)
+        #expect(DeviceSymbol.look(forName: "USB Audio Device") == nil)
+    }
+
+    @Test func everydayDevicesGetTheirOwnSymbols() {
+        #expect(DeviceSymbol.look(forName: "WH-1000XM6") == DeviceLook("headphones.over.ear", personal: true))
+        #expect(DeviceSymbol.look(forName: "WF-1000XM5")?.symbol == "earbuds")
+        #expect(DeviceSymbol.look(forName: "Galaxy Buds3 Pro")?.symbol == "earbuds")
+        #expect(DeviceSymbol.look(forName: "Beats Studio Buds +")?.symbol == "beats.studiobudsplus")
+        #expect(DeviceSymbol.look(forName: "Powerbeats Pro")?.symbol == "beats.powerbeats.pro")
+        #expect(DeviceSymbol.look(forName: "Beats Pill")?.isPersonal == false)
+        // The Mac's own speakers aren't a hi-fi speaker, in either language.
+        #expect(DeviceSymbol.look(forName: "MacBook Air Speakers")?.symbol == "macbook")
+        #expect(DeviceSymbol.look(forName: "MacBook Pro扬声器")?.symbol == "macbook")
+        #expect(DeviceSymbol.look(forName: "Studio Display Speakers")?.symbol == "display")
+        #expect(DeviceSymbol.look(forName: "Magic Trackpad")?.symbol == "rectangle.and.hand.point.up.left.fill")
+        #expect(DeviceSymbol.look(forName: "Magic Keyboard with Touch ID")?.symbol == "keyboard.fill")
+        #expect(DeviceSymbol.look(forName: "MX Master 3S")?.symbol == "computermouse.fill")
+        #expect(DeviceSymbol.look(forName: "DualSense Wireless Controller")?.symbol == "gamecontroller.fill")
+        #expect(DeviceSymbol.look(forName: "Xbox Wireless Controller")?.symbol == "gamecontroller.fill")
+        #expect(DeviceSymbol.look(forName: "Rick’s iPhone")?.symbol == "iphone")
+        #expect(DeviceSymbol.look(forName: "Living Room TV")?.symbol == "tv.fill")
+        #expect(DeviceSymbol.look(forName: "Stevens")?.symbol == nil)
+    }
+
+    @Test func coreAudioModelIDsNameAppleHeadphones() {
+        #expect(DeviceSymbol.look(forModelUID: "2014 4c")?.symbol == "airpods.pro")
+        #expect(DeviceSymbol.look(forModelUID: "200a 4c")?.symbol == "airpods.max")
+        // Sony's WH-1000XM6: not Apple's, so the name decides.
+        #expect(DeviceSymbol.look(forModelUID: "f8a 54c") == nil)
+        #expect(DeviceSymbol.look(forModelUID: "Speaker") == nil)
+    }
+
+    @Test func bluetoothClassesSayWhatADeviceIs() {
+        #expect(DeviceSymbol.symbol(forMajorClass: 0x04, minor: 0x06) == "headphones")
+        #expect(DeviceSymbol.symbol(forMajorClass: 0x04, minor: 0x05) == "hifispeaker.fill")
+        #expect(DeviceSymbol.symbol(forMajorClass: 0x04, minor: 0x08) == "car.fill")
+        #expect(DeviceSymbol.symbol(forMajorClass: 0x05, minor: 0x02) == "gamecontroller.fill")
+        #expect(DeviceSymbol.symbol(forMajorClass: 0x05, minor: 0x20) == "computermouse.fill")
+        #expect(DeviceSymbol.symbol(forMajorClass: 0x05, minor: 0x10) == "keyboard.fill")
+    }
+
+    @Test func wingsShowTheModelNotTheOwner() {
+        #expect(DeviceSymbol.shortName("Rick's AirPods Pro") == "AirPods Pro")
+        #expect(DeviceSymbol.shortName("Rick’s AirPods Pro") == "AirPods Pro")
+        #expect(DeviceSymbol.shortName("小白的AirPods Max") == "AirPods Max")
+        #expect(DeviceSymbol.shortName("WH-1000XM6") == "WH-1000XM6")
+        // Not a model after the apostrophe, so the name stays whole.
+        #expect(DeviceSymbol.shortName("Rick's Thing") == "Rick's Thing")
+    }
+
+    @Test func allTheSymbolsExist() {
+        let names = ["WH-1000XM6", "WF-1000XM5", "Beats Studio Buds +", "Powerbeats Pro", "Beats Pill", "Beats Flex",
+                     "MacBook Air Speakers", "iMac Speakers", "Mac mini Speakers", "Mac Studio Speakers", "Mac Pro Speakers",
+                     "HomePod", "HomePod mini", "Apple TV", "iPad", "Apple Watch", "Vision Pro", "Apple Pencil",
+                     "Magic Trackpad", "Magic Mouse", "Magic Keyboard", "MX Master", "DualSense", "Studio Display", "TV", "Sonos"]
+        var symbols = names.compactMap { DeviceSymbol.look(forName: $0)?.symbol }
+        symbols += [0x2002, 0x2013, 0x2019, 0x2014, 0x200A, 0x2003, 0x200D, 0x200B, 0x2005, 0x2006, 0x2011, 0x2016, 0x2012]
+            .compactMap(AppleAudioModel.symbol(for:))
+        symbols += symbols.map(AppleAudioModel.caseSymbol(for:))
+        symbols += [(1, 1), (1, 3), (2, 3), (4, 15), (5, 3), (6, 0), (7, 1), (9, 0)].map { DeviceSymbol.symbol(forMajorClass: $0.0, minor: $0.1) }
+        #expect(symbols.count > names.count)
+        for symbol in symbols {
+            #expect(NSImage(systemSymbolName: symbol, accessibilityDescription: nil) != nil, "\(symbol)")
+        }
     }
 
     @Test func theCaseMatchesTheEarbuds() {

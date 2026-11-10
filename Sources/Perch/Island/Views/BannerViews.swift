@@ -82,7 +82,7 @@ struct LevelWings: View {
         switch hud.kind {
         case .volume:
             if hud.isSilent { return tr("静音", "Muted") }
-            if let route = hud.route, route.isPersonal, !route.name.isEmpty { return route.name }
+            if let route = hud.route, route.isPersonal, !route.name.isEmpty { return DeviceSymbol.shortName(route.name) }
             return tr("声音", "Sound")
         case .brightness:
             return tr("亮度", "Display")
@@ -92,10 +92,13 @@ struct LevelWings: View {
     }
 }
 
+/// A device arriving or leaving. Arriving, its icon gives one small hop, the way a thing settles
+/// when set down; leaving, the icon and name dim as the word "Disconnected" fades in.
 private struct DeviceWings: View {
     let device: BluetoothDevice
     let connected: Bool
     @Environment(BluetoothMonitor.self) private var bluetooth
+    @State private var appeared = false
 
     var body: some View {
         // Batteries often report a few seconds after connecting; show them as they arrive.
@@ -104,22 +107,36 @@ private struct DeviceWings: View {
             HStack(spacing: 6) {
                 Image(systemName: device.symbol)
                     .font(.system(size: 14, weight: .medium))
-                Text(device.name)
+                    .symbolEffect(.bounce.down, value: appeared && connected)
+                    .frame(minWidth: 18)
+                Text(DeviceSymbol.shortName(device.name))
                     .font(.system(size: 12.5, weight: .semibold))
                     .lineLimit(1)
             }
+            .opacity(connected ? 1 : 0.55)
+            .help(device.name)
         } trailing: {
-            if !connected {
-                Text(tr("已断开", "Disconnected"))
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.5))
-            } else if battery.isEmpty {
-                Text(tr("已连接", "Connected"))
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(.green)
-            } else {
-                BatteryReadout(battery: battery, caseSymbol: AppleAudioModel.caseSymbol(for: device.symbol))
+            Group {
+                if !connected {
+                    Text(tr("已断开", "Disconnected"))
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.5))
+                } else if battery.isEmpty {
+                    Text(tr("已连接", "Connected"))
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(.green)
+                        .transition(.opacity)
+                } else {
+                    BatteryReadout(battery: battery, caseSymbol: AppleAudioModel.caseSymbol(for: device.symbol))
+                        .transition(.opacity.combined(with: .scale(scale: 0.85, anchor: .trailing)))
+                }
             }
+            .animation(.smooth(duration: 0.35), value: battery.isEmpty)
+        }
+        .task {
+            // After the island has opened around it, not while it's still a blur.
+            try? await Task.sleep(for: .milliseconds(260))
+            appeared = true
         }
     }
 }
@@ -193,22 +210,42 @@ private struct PowerWings: View {
     }
 }
 
+/// Sound moving to another output: the new device on the left, with a short ripple of sound
+/// waves when it's a speaker, a hop when it's worn.
 private struct RouteWings: View {
     let route: AudioRoute
+    @State private var appeared = false
 
     var body: some View {
         WingsLayout {
             HStack(spacing: 6) {
-                Image(systemName: route.symbol)
+                icon
                     .font(.system(size: 14, weight: .medium))
-                Text(route.name)
+                    .frame(minWidth: 18)
+                Text(DeviceSymbol.shortName(route.name))
                     .font(.system(size: 12.5, weight: .semibold))
                     .lineLimit(1)
             }
+            .help(route.name)
         } trailing: {
             Text(tr("音频输出", "Output"))
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(.white.opacity(0.5))
+        }
+        .task {
+            try? await Task.sleep(for: .milliseconds(260))
+            appeared = true
+        }
+    }
+
+    @ViewBuilder
+    private var icon: some View {
+        if route.symbol.hasPrefix("speaker.wave") {
+            Image(systemName: route.symbol)
+                .symbolEffect(.variableColor.iterative.dimInactiveLayers.nonReversing, options: .repeat(1), value: appeared)
+        } else {
+            Image(systemName: route.symbol)
+                .symbolEffect(.bounce.down, value: appeared)
         }
     }
 }

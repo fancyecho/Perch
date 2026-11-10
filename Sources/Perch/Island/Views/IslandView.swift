@@ -164,7 +164,6 @@ private struct IslandMenu: View {
                 Divider()
             }
             FocusMenuItems()
-            Button(tr("系统状态", "System Status")) { model.statusHandler?() }
             Divider()
             Button(tr("灵动岛设置…", "Island Settings…")) { model.settingsHandler?(.island) }
             QuitMenuItem()
@@ -189,7 +188,7 @@ private struct IslandContent: View {
             case .banner(let banner):
                 BannerView(banner: banner)
                     .frame(width: size.width, height: size.height)
-                    .id(banner.kind)
+                    .id(banner.subject)
                     .transition(.materialize)
             case .expanded:
                 ExpandedIslandView()

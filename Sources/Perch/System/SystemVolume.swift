@@ -8,6 +8,19 @@ nonisolated struct AudioRoute: Equatable, Sendable {
     var symbol: String
     /// Headphones of some kind, so the volume HUD shows the device instead of a speaker.
     var isPersonal: Bool
+    /// A Bluetooth device's address ("58-18-62-d2-5f-81"), to match it with what Bluetooth knows.
+    var address: String?
+
+    init(name: String, symbol: String, isPersonal: Bool, address: String? = nil) {
+        self.name = name
+        self.symbol = symbol
+        self.isPersonal = isPersonal
+        self.address = address
+    }
+
+    init(name: String, look: DeviceLook, address: String? = nil) {
+        self.init(name: name, symbol: look.symbol, isPersonal: look.isPersonal, address: address)
+    }
 
     static let speakers = AudioRoute(name: "", symbol: "speaker.wave.2.fill", isPersonal: false)
 }
@@ -228,15 +241,11 @@ final class SystemVolume {
     }
 
     private static func route(of device: AudioObjectID) -> AudioRoute {
-        var address = address(kAudioObjectPropertyName, scope: kAudioObjectPropertyScopeGlobal)
-        var name: Unmanaged<CFString>?
-        var size = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
-        let status = withUnsafeMutablePointer(to: &name) { AudioObjectGetPropertyData(device, &address, 0, nil, &size, $0) }
-        let deviceName = status == noErr ? (name?.takeRetainedValue() as String?) ?? "" : ""
+        let deviceName = string(kAudioObjectPropertyName, of: device)
 
         var transport: UInt32 = 0
-        size = UInt32(MemoryLayout<UInt32>.size)
-        address = Self.address(kAudioDevicePropertyTransportType, scope: kAudioObjectPropertyScopeGlobal)
+        var size = UInt32(MemoryLayout<UInt32>.size)
+        var address = Self.address(kAudioDevicePropertyTransportType, scope: kAudioObjectPropertyScopeGlobal)
         AudioObjectGetPropertyData(device, &address, 0, nil, &size, &transport)
 
         var source: UInt32 = 0
@@ -244,48 +253,41 @@ final class SystemVolume {
         address = Self.address(kAudioDevicePropertyDataSource)
         AudioObjectGetPropertyData(device, &address, 0, nil, &size, &source)
 
-        if let symbol = symbol(forName: deviceName) {
-            return AudioRoute(name: deviceName, symbol: symbol.name, isPersonal: symbol.personal)
+        let isBluetooth = transport == kAudioDeviceTransportTypeBluetooth || transport == kAudioDeviceTransportTypeBluetoothLE
+        // A Bluetooth device's UID is its address with ":output" on the end.
+        let bluetoothAddress = isBluetooth
+            ? string(kAudioDevicePropertyDeviceUID, of: device).split(separator: ":").first.map(String.init)
+            : nil
+        let route = { (look: DeviceLook) in AudioRoute(name: deviceName, look: look, address: bluetoothAddress) }
+
+        // The model ID knows AirPods by model however they've been renamed.
+        if isBluetooth, let look = DeviceSymbol.look(forModelUID: string(kAudioDevicePropertyModelUID, of: device)) {
+            return route(look)
         }
-        let personal = { (symbol: String) in AudioRoute(name: deviceName, symbol: symbol, isPersonal: true) }
+        if let look = DeviceSymbol.look(forName: deviceName) { return route(look) }
         switch transport {
         case kAudioDeviceTransportTypeBluetooth, kAudioDeviceTransportTypeBluetoothLE:
-            return personal("headphones")
+            return route(DeviceLook("headphones", personal: true))
         case kAudioDeviceTransportTypeBuiltIn where source == 0x6864_706E: // 'hdpn': the headphone jack
-            return personal("headphones")
+            return route(DeviceLook("headphones", personal: true))
         case kAudioDeviceTransportTypeHDMI, kAudioDeviceTransportTypeDisplayPort:
-            return AudioRoute(name: deviceName, symbol: "tv.fill", isPersonal: false)
+            return route(DeviceLook("display", personal: false))
         case kAudioDeviceTransportTypeAirPlay:
-            return AudioRoute(name: deviceName, symbol: "airplay.audio", isPersonal: false)
+            return route(DeviceLook("airplay.audio", personal: false))
         case kAudioDeviceTransportTypeBuiltIn:
-            return AudioRoute(name: deviceName, symbol: "speaker.wave.2.fill", isPersonal: false)
+            return route(DeviceLook("speaker.wave.2.fill", personal: false))
         case kAudioDeviceTransportTypeVirtual, kAudioDeviceTransportTypeAggregate:
-            return AudioRoute(name: deviceName, symbol: "waveform", isPersonal: false)
+            return route(DeviceLook("waveform", personal: false))
         default:
-            return AudioRoute(name: deviceName, symbol: "hifispeaker.fill", isPersonal: false)
+            return route(DeviceLook("hifispeaker.fill", personal: false))
         }
     }
 
-    /// What a device's name gives away, before falling back on how it's connected: wired EarPods
-    /// over USB-C or Lightning would otherwise pass for a speaker.
-    nonisolated static func symbol(forName name: String) -> (name: String, personal: Bool)? {
-        let lowered = name.lowercased()
-        let has = { (words: [String]) in words.contains { lowered.contains($0) } }
-        if has(["airpods max"]) { return ("airpods.max", true) }
-        if has(["airpods pro"]) { return ("airpods.pro", true) }
-        if has(["airpods 4"]) { return ("airpods.gen4", true) }
-        if has(["airpods (3", "airpods 3"]) { return ("airpods.gen3", true) }
-        if has(["airpods"]) { return ("airpods", true) }
-        if has(["earpods"]) { return ("earpods", true) }
-        if has(["powerbeats"]) { return ("beats.powerbeatspro", true) }
-        if has(["studio buds", "beats fit", "beats solo buds"]) { return ("beats.studiobudsplus", true) }
-        if has(["beats"]) { return ("beats.headphones", true) }
-        if has(["homepod mini"]) { return ("homepodmini.fill", false) }
-        if has(["homepod"]) { return ("homepod.fill", false) }
-        if has(["buds", "earbud", "earphone", "in-ear", "耳塞"]) { return ("earbuds", true) }
-        if has(["headphone", "headset", "耳机", "耳麦"]) { return ("headphones", true) }
-        if has(["studio display", "display", "monitor", "显示器"]) { return ("display", false) }
-        if has(["speaker", "soundbar", "音箱", "音响", "扬声器"]) { return ("hifispeaker.fill", false) }
-        return nil
+    private static func string(_ selector: AudioObjectPropertySelector, of device: AudioObjectID) -> String {
+        var address = Self.address(selector, scope: kAudioObjectPropertyScopeGlobal)
+        var value: Unmanaged<CFString>?
+        var size = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
+        let status = withUnsafeMutablePointer(to: &value) { AudioObjectGetPropertyData(device, &address, 0, nil, &size, $0) }
+        return status == noErr ? (value?.takeRetainedValue() as String?) ?? "" : ""
     }
 }

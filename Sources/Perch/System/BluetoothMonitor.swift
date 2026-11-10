@@ -90,12 +90,22 @@ final class BluetoothMonitor: NSObject {
         devices = []
     }
 
-    /// An audio output that is one of these devices takes the device's own symbol: CoreAudio only
-    /// knows the name, which draws AirPods 3 as the generic AirPods.
+    /// An audio output that is one of these devices takes the device's own symbol when CoreAudio
+    /// could only tell what kind of thing it is (headphones, or the generic AirPods).
     func refine(_ route: AudioRoute) -> AudioRoute {
-        guard let device = devices.first(where: { $0.name.caseInsensitiveCompare(route.name) == .orderedSame }) else { return route }
+        guard DeviceSymbol.generic.contains(route.symbol) else { return route }
+        let address = route.address.map(Self.addressKey)
+        guard let device = devices.first(where: { device in
+            if let address, Self.addressKey(device.id) == address { return true }
+            return device.name.caseInsensitiveCompare(route.name) == .orderedSame
+        }), device.symbol != route.symbol, device.symbol != "wave.3.right",
+              // A device known only by its class says less than a name did, unless CoreAudio was
+              // merely guessing headphones for anything on Bluetooth.
+              !DeviceSymbol.generic.contains(device.symbol) || route.symbol == "headphones" else { return route }
         var refined = route
         refined.symbol = device.symbol
+        // A Bluetooth speaker isn't worn, however CoreAudio first guessed it.
+        refined.isPersonal = DeviceSymbol.isWorn(device.symbol)
         return refined
     }
 
@@ -271,45 +281,7 @@ final class BluetoothMonitor: NSObject {
         let product = (device.value(forKey: "productID") as? NSNumber)?.intValue
         if vendor == 0x004C, let product, let symbol = AppleAudioModel.symbol(for: product) { return symbol }
 
-        if let symbol = SystemVolume.symbol(forName: device.name ?? "") { return symbol.name }
-        let name = (device.name ?? "").lowercased()
-        if name.contains("trackpad") { return "rectangle.and.hand.point.up.left.fill" }
-        if name.contains("magic mouse") { return "magicmouse.fill" }
-
-        // Bluetooth class of device: the major class says what it is, the minor class narrows it.
-        let minor = Int(device.deviceClassMinor)
-        switch Int(device.deviceClassMajor) {
-        case 0x01: return "laptopcomputer"
-        case 0x02: return "iphone"
-        case 0x04: return minor == 0x05 || minor == 0x07 ? "hifispeaker.fill" : "headphones"
-        case 0x05:
-            if minor & 0x0F == 0x01 || minor & 0x0F == 0x02 { return "gamecontroller.fill" }
-            if minor & 0x30 == 0x20 { return "computermouse.fill" }
-            return "keyboard.fill"
-        case 0x07: return "applewatch"
-        default: return "wave.3.right"
-        }
-    }
-}
-
-/// Apple and Beats headphones by Bluetooth product ID, as SF Symbols draw them.
-nonisolated enum AppleAudioModel {
-    private static let symbols: [Int: String] = [
-        0x2002: "airpods", 0x200F: "airpods", 0x2013: "airpods.gen3", 0x2019: "airpods.gen4", 0x201B: "airpods.gen4",
-        0x200E: "airpods.pro", 0x2014: "airpods.pro", 0x2024: "airpods.pro", 0x2027: "airpods.pro",
-        0x200A: "airpods.max", 0x201F: "airpods.max",
-        0x200B: "beats.powerbeats.pro", 0x2011: "beats.studiobuds", 0x2016: "beats.studiobuds", 0x2012: "beats.fitpro",
-    ]
-
-    static func symbol(for product: Int) -> String? { symbols[product] }
-
-    /// The charging case that goes with the earbuds' symbol.
-    static func caseSymbol(for symbol: String) -> String {
-        switch symbol {
-        case "airpods.gen3": "airpods.gen3.chargingcase.wireless"
-        case "airpods.gen4": "airpods.gen4.chargingcase.wireless"
-        case "airpods.pro", "airpodspro": "airpods.pro.chargingcase.wireless"
-        default: "airpods.chargingcase"
-        }
+        if let look = DeviceSymbol.look(forName: device.name ?? "") { return look.symbol }
+        return DeviceSymbol.symbol(forMajorClass: Int(device.deviceClassMajor), minor: Int(device.deviceClassMinor))
     }
 }

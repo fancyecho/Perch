@@ -99,6 +99,16 @@ enum IslandBanner: Equatable {
         }
     }
 
+    /// What the banner is about. Banners of a kind update in place, but a different device or output
+    /// gives way to the next one instead of changing name under a still icon; a level never does.
+    var subject: String {
+        switch self {
+        case .device(let device, let connected): "device \(device.id) \(connected)"
+        case .route(let route): "route \(route.name)"
+        default: "\(kind)"
+        }
+    }
+
     /// What still shows while the focus blur is up: a key the user pressed, a task falling due.
     var passesCurtain: Bool {
         switch kind {
@@ -262,8 +272,6 @@ final class IslandModel {
     /// Opens the full task list; true also focuses the new-task field.
     @ObservationIgnored var tasksHandler: ((Bool) -> Void)?
     @ObservationIgnored var settingsHandler: ((SettingsTab) -> Void)?
-    /// Opens the island on its status page.
-    @ObservationIgnored var statusHandler: (() -> Void)?
     /// Shows a gauge's detail on the status page.
     @ObservationIgnored var metricHandler: ((StatusMetric) -> Void)?
     /// Moves the open island to a page.
