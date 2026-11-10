@@ -52,6 +52,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         reminders.activate()
         reminders.onOpen = { [weak self] in self?.openTasks(focusInput: false) }
+        reminders.onAction = { [weak self] id, action in self?.store.answer(action, for: id) }
         reminders.sync(store.tasks)
         store.onChange = { [weak self] in
             guard let self else { return }
@@ -96,6 +97,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             MainActor.assumeIsolated {
                 self?.applyIslandPreference()
                 self?.applyLinePreference()
+                self?.applyReminderTiming()
             }
         }
 
@@ -221,6 +223,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             reminders.deliversQuietly = quiet
             reminders.sync(store.tasks)
         }
+    }
+
+    /// Start and end reminders switch on and off in Settings › Tasks.
+    private func applyReminderTiming() {
+        if reminders.refreshTiming() { reminders.sync(store.tasks) }
     }
 
     /// Notification text is localized and shows times in the selected zone, so rebuild it on change.

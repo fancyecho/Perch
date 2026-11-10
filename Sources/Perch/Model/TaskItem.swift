@@ -103,6 +103,91 @@ nonisolated enum Schedule: Hashable, Sendable {
     }
 }
 
+/// How a task comes back once it's done (or skipped): the next one lands on the next matching day,
+/// at the same time of day and with the same length.
+nonisolated enum Recurrence: Hashable, Sendable {
+    case daily
+    /// Monday to Friday.
+    case weekdays
+    /// On these weekdays, 0 = Monday … 6 = Sunday. Never empty.
+    case weekly(Set<Int>)
+    /// The same day of the month (the last day, in months too short for it).
+    case monthly
+
+    func matches(_ day: Day, anchor: Day) -> Bool {
+        switch self {
+        case .daily: true
+        case .weekdays: day.mondayIndex < 5
+        case .weekly(let days): days.contains(day.mondayIndex)
+        case .monthly: day.day == min(anchor.day, day.lastDayOfMonth)
+        }
+    }
+
+    /// The first matching day after `day`. `anchor` is the day of the month a monthly task keeps.
+    func next(after day: Day, anchor: Day? = nil) -> Day {
+        let anchor = anchor ?? day
+        if case .monthly = self {
+            let (year, month) = day.month == 12 ? (day.year + 1, 1) : (day.year, day.month + 1)
+            let last = Day(year: year, month: month, day: 1).lastDayOfMonth
+            return Day(year: year, month: month, day: min(anchor.day, last))
+        }
+        var candidate = day.adding(days: 1)
+        while !matches(candidate, anchor: anchor) { candidate = candidate.adding(days: 1) }
+        return candidate
+    }
+
+    /// The first matching day on or after `day`.
+    func first(onOrAfter day: Day) -> Day {
+        matches(day, anchor: day) ? day : next(after: day, anchor: day)
+    }
+
+    @MainActor var title: String {
+        switch self {
+        case .daily: return tr("每天", "Every day")
+        case .weekdays: return tr("工作日", "Weekdays")
+        case .monthly: return tr("每月", "Monthly")
+        case .weekly(let days):
+            let sorted = days.sorted()
+            if sorted == Array(0...6) { return tr("每天", "Every day") }
+            if sorted == Array(0...4) { return tr("工作日", "Weekdays") }
+            let zh = ["一", "二", "三", "四", "五", "六", "日"]
+            let en = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+            return tr("每周" + sorted.map { zh[$0] }.joined(separator: "、"), "Every " + sorted.map { en[$0] }.joined(separator: ", "))
+        }
+    }
+
+    /// Stored as text: "daily", "weekdays", "weekly:0,2,4", "monthly".
+    var storageValue: String {
+        switch self {
+        case .daily: "daily"
+        case .weekdays: "weekdays"
+        case .monthly: "monthly"
+        case .weekly(let days): "weekly:" + days.sorted().map(String.init).joined(separator: ",")
+        }
+    }
+
+    init?(storageValue: String) {
+        switch storageValue {
+        case "daily": self = .daily
+        case "weekdays": self = .weekdays
+        case "monthly": self = .monthly
+        default:
+            guard storageValue.hasPrefix("weekly:") else { return nil }
+            let days = Set(storageValue.dropFirst(7).split(separator: ",").compactMap { Int($0) }.filter { (0...6).contains($0) })
+            guard !days.isEmpty else { return nil }
+            self = .weekly(days)
+        }
+    }
+}
+
+extension Day {
+    nonisolated var lastDayOfMonth: Int {
+        var day = 31
+        while day > 28, !Day(year: year, month: month, day: day).isValid { day -= 1 }
+        return day
+    }
+}
+
 nonisolated struct TaskItem: Identifiable, Hashable, Sendable {
     var id = UUID()
     var title: String
@@ -115,6 +200,8 @@ nonisolated struct TaskItem: Identifiable, Hashable, Sendable {
     var duration: Int?
     /// A color picked by hand. Nil derives one from the first tag.
     var color: TaskColor?
+    /// Comes back on a schedule once done or skipped.
+    var recurrence: Recurrence?
 
     static let defaultDuration = 30
     static let durationRange = 5...(24 * 60)
@@ -130,7 +217,7 @@ nonisolated struct TaskItem: Identifiable, Hashable, Sendable {
 
 extension TaskItem: Codable {
     private enum CodingKeys: String, CodingKey {
-        case id, title, day, at, priority, tags, createdAt, completedAt, duration, color
+        case id, title, day, at, priority, tags, createdAt, completedAt, duration, color, repeats
         // Format used before floating days existed.
         case due, hasTime
     }
@@ -145,6 +232,7 @@ extension TaskItem: Codable {
         completedAt = try c.decodeIfPresent(Date.self, forKey: .completedAt)
         duration = try c.decodeIfPresent(Int.self, forKey: .duration)
         color = try? c.decodeIfPresent(TaskColor.self, forKey: .color)
+        recurrence = (try? c.decodeIfPresent(String.self, forKey: .repeats)).flatMap { $0.flatMap(Recurrence.init(storageValue:)) }
 
         if let at = try c.decodeIfPresent(Date.self, forKey: .at) {
             schedule = .time(at)
@@ -172,6 +260,7 @@ extension TaskItem: Codable {
         try c.encodeIfPresent(completedAt, forKey: .completedAt)
         try c.encodeIfPresent(duration, forKey: .duration)
         try c.encodeIfPresent(color, forKey: .color)
+        try c.encodeIfPresent(recurrence?.storageValue, forKey: .repeats)
     }
 }
 

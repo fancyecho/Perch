@@ -1,5 +1,5 @@
 // Drives a debug build of Perch: swift scripts/poke.swift <command>
-// Commands: expand, collapse, page:status, page:main, status, close, tasks, focustab, focus, schedules, settings:<tab>, alert, pass[:bundle id]
+// Commands: expand, collapse, page:status, page:main, status, close, tasks, focustab, focus, schedules, settings:<tab>, alert, remind[:start], pass[:bundle id]
 import Foundation
 
 let command = CommandLine.arguments.dropFirst().first ?? ""

@@ -33,12 +33,14 @@ struct ScheduleEditor: View {
             daySegments
             WeekStrip(selection: day, today: today, tint: task?.tint.color ?? .accentColor, onPick: setDay)
             timeCard
+            repeatCard
             colorRow
             phraseField
         }
         .padding(16)
         .frame(width: 288)
         .animation(.snappy(duration: 0.25), value: clock == nil)
+        .animation(.snappy(duration: 0.25), value: isWeekly)
     }
 
     // MARK: - Parts
@@ -142,6 +144,84 @@ struct ScheduleEditor: View {
         }
         .padding(12)
         .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.primary.opacity(0.045)))
+    }
+
+    private var isWeekly: Bool {
+        if case .weekly = task?.recurrence { return true }
+        return false
+    }
+
+    /// Never, every day, weekdays, weekly (on the days picked below), monthly.
+    private var repeatCard: some View {
+        let recurrence = task?.recurrence
+        let choice = switch recurrence {
+        case nil: 0
+        case .daily: 1
+        case .weekdays: 2
+        case .weekly: 3
+        case .monthly: 4
+        }
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Label(tr("重复", "Repeat"), systemImage: "repeat")
+                    .font(.system(size: 12.5, weight: .medium))
+                Spacer()
+                if let recurrence {
+                    Text(recurrence.title)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .contentTransition(.opacity)
+                }
+            }
+            SegmentedPills(
+                labels: [tr("不重复", "Never"), tr("每天", "Daily"), tr("工作日", "Weekdays"), tr("每周", "Weekly"), tr("每月", "Monthly")],
+                selection: choice,
+                namespace: segments,
+                id: "repeat"
+            ) { index in
+                let weekday = (day ?? today).mondayIndex
+                let rule: Recurrence? = switch index {
+                case 1: .daily
+                case 2: .weekdays
+                case 3: .weekly([weekday])
+                case 4: .monthly
+                default: nil
+                }
+                withAnimation(.snappy) { store.setRecurrence(taskID, rule) }
+            }
+            if case .weekly(let days) = recurrence {
+                weekdayPicker(days)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+        .padding(12)
+        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.primary.opacity(0.045)))
+    }
+
+    /// Seven small circles, Monday first; at least one stays on.
+    private func weekdayPicker(_ days: Set<Int>) -> some View {
+        let names = settings.isChinese ? ["一", "二", "三", "四", "五", "六", "日"] : ["M", "T", "W", "T", "F", "S", "S"]
+        let tint = task?.tint.color ?? .accentColor
+        return HStack(spacing: 0) {
+            ForEach(0..<7, id: \.self) { index in
+                let isOn = days.contains(index)
+                Button {
+                    var next = days
+                    if isOn { next.remove(index) } else { next.insert(index) }
+                    guard !next.isEmpty else { return }
+                    withAnimation(.snappy) { store.setRecurrence(taskID, .weekly(next)) }
+                } label: {
+                    Text(names[index])
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(isOn ? Color.white : .secondary)
+                        .frame(width: 26, height: 26)
+                        .background(Circle().fill(isOn ? tint : Color.primary.opacity(0.06)))
+                        .contentShape(.circle)
+                }
+                .buttonStyle(.plain)
+                .frame(maxWidth: .infinity)
+            }
+        }
     }
 
     private func timeBox(_ title: String, selection: Binding<Date>) -> some View {
@@ -283,13 +363,14 @@ struct ScheduleEditor: View {
 
     private func applyPhrase(_ text: String) {
         let parsed = QuickParser.parse(text, now: .now, calendar: calendar)
-        guard parsed.hasExplicitDate, let schedule = parsed.schedule else {
+        guard parsed.hasExplicitDate || parsed.recurrence != nil, let schedule = parsed.schedule else {
             rejected += 1
             NSSound.beep()
             return
         }
         apply(schedule)
         if let minutes = parsed.duration { store.setDuration(taskID, minutes: minutes) }
+        if let rule = parsed.recurrence { store.setRecurrence(taskID, rule) }
         phrase = ""
     }
 

@@ -191,6 +191,36 @@ private struct TasksPane: View {
     @AppStorage(Pref.islandTaskStyle) private var taskStyle = TaskStyle.capsule.rawValue
     @AppStorage(Pref.taskDefaultColor) private var defaultColor = TaskColor.coral.rawValue
     @AppStorage(Pref.taskTopicColors) private var topicColors = true
+    @AppStorage(Pref.remindAtStart) private var remindAtStart = false
+    @AppStorage(Pref.remindAtEnd) private var remindAtEnd = true
+    @AppStorage(Pref.reviewEnabled) private var reviewEnabled = true
+    @AppStorage(Pref.reviewTime) private var reviewTime = 21 * 60 + 30
+    @AppStorage(Pref.timelineStart) private var timelineStart = 7 * 60
+    @AppStorage(Pref.timelineEnd) private var timelineEnd = 23 * 60
+
+    /// A time of day kept as minutes after midnight, as a date today for a time picker. The
+    /// day's start stays before its end.
+    private func clock(_ minutes: Binding<Int>, range: ClosedRange<Int>) -> Binding<Date> {
+        Binding(
+            get: { Calendar.current.date(bySettingHour: minutes.wrappedValue / 60, minute: minutes.wrappedValue % 60, second: 0, of: .now) ?? .now },
+            set: { date in
+                let c = Calendar.current.dateComponents([.hour, .minute], from: date)
+                let value = (c.hour ?? 0) * 60 + (c.minute ?? 0)
+                if range.contains(value) { minutes.wrappedValue = value }
+            }
+        )
+    }
+
+    /// The review time as a date today, for the time picker.
+    private var reviewDate: Binding<Date> {
+        Binding(
+            get: { Calendar.current.date(bySettingHour: reviewTime / 60, minute: reviewTime % 60, second: 0, of: .now) ?? .now },
+            set: { date in
+                let c = Calendar.current.dateComponents([.hour, .minute], from: date)
+                reviewTime = (c.hour ?? 21) * 60 + (c.minute ?? 30)
+            }
+        )
+    }
 
     var body: some View {
         Form {
@@ -218,8 +248,34 @@ private struct TasksPane: View {
 
             CapsuleClockSection()
 
+            Section {
+                Toggle(tr("任务开始时", "When a task starts"), isOn: $remindAtStart)
+                Toggle(tr("时间段结束时", "When its time is up"), isOn: $remindAtEnd)
+                Toggle(tr("每晚整理没做完的任务", "Review what's left each evening"), isOn: $reviewEnabled)
+                if reviewEnabled {
+                    DatePicker(tr("整理时间", "Review at"), selection: reviewDate, displayedComponents: .hourAndMinute)
+                }
+            } header: {
+                Text(tr("提醒", "Reminders"))
+            } footer: {
+                Text(tr("只对设了时间的任务；没设时长的按 30 分钟算。到了整理时间，「今天」顶上会列出还没做完的，一键勾掉或挪到明天。",
+                        "Only for tasks with a time; without a length they last 30 minutes. At review time, Today leads with what's still open, to check off or move to tomorrow."))
+                    .foregroundStyle(.secondary)
+            }
+
             Section(tr("体验", "Experience")) {
                 Toggle(tr("「今天」显示时间轴", "Show timeline in Today"), isOn: $showsTimeline)
+                if showsTimeline {
+                    LabeledContent(tr("时间轴从", "Timeline runs from")) {
+                        HStack(spacing: 6) {
+                            DatePicker("", selection: clock($timelineStart, range: 0...(timelineEnd - 60)), displayedComponents: .hourAndMinute)
+                                .labelsHidden()
+                            Text(tr("到", "to")).foregroundStyle(.secondary)
+                            DatePicker("", selection: clock($timelineEnd, range: (timelineStart + 60)...(24 * 60 - 1)), displayedComponents: .hourAndMinute)
+                                .labelsHidden()
+                        }
+                    }
+                }
                 LabeledContent(tr("任务默认颜色", "Default task color")) {
                     ColorSwatchPicker(selection: $defaultColor)
                 }
@@ -345,7 +401,7 @@ private struct IslandPane: View {
                     Toggle(tr("正在播放", "Now Playing"), isOn: $nowPlaying)
                     Toggle(tr("蓝牙设备与音频输出", "Bluetooth devices & audio output"), isOn: $devices)
                     Toggle(tr("充电与电量", "Charging & battery"), isOn: $battery)
-                    Toggle(tr("任务到点时在刘海提醒", "Remind me at the notch when tasks are due"), isOn: $reminders)
+                    Toggle(tr("在刘海显示任务提醒", "Show task reminders at the notch"), isOn: $reminders)
                 }
                 Section(tr("音量与亮度提示", "Volume & brightness")) {
                     Toggle(tr("显示音量与亮度提示", "Show volume & brightness"), isOn: $levels)
@@ -380,6 +436,8 @@ private struct HelpPane: View {
                 ReferenceRow(example: "明天 / 周五 / 下周三 / 10月1日 · tomorrow / fri / next wed / 10/1", meaning: tr("日期", "Date"))
                 ReferenceRow(example: "下午3点 / 晚上8点半 / 15:30 · 3pm / at 9", meaning: tr("时间", "Time"))
                 ReferenceRow(example: "2小时后 / 3天后 · in 30 min / in 3 days", meaning: tr("相对时间", "Relative"))
+                ReferenceRow(example: "3点到5点 / 1小时 / 45分钟 · 3-5pm / for 1h", meaning: tr("时长", "Length"))
+                ReferenceRow(example: "每天 / 工作日 / 每周一三五 / 每月 · every day / weekdays / every mon / monthly", meaning: tr("重复", "Repeat"))
                 ReferenceRow(example: "! / !! / !!!  · p3 / p2 / p1", meaning: tr("优先级 低 / 中 / 高", "Priority low / med / high"))
                 ReferenceRow(example: "#工作 · #work", meaning: tr("标签", "Tag"))
             }
@@ -388,6 +446,8 @@ private struct HelpPane: View {
                 ReferenceRow(example: tr("触控板向右扫 / 鼠标向右拖", "Swipe or drag right"), meaning: tr("完成", "Complete"))
                 ReferenceRow(example: tr("触控板向左扫 / 鼠标向左拖", "Swipe or drag left"), meaning: tr("推迟到明天", "Move to tomorrow"))
                 ReferenceRow(example: tr("双击任务文字", "Double-click a title"), meaning: tr("编辑", "Edit"))
+                ReferenceRow(example: tr("在时间轴上按住任务上下拖 / 拖胶囊下边缘", "Drag a task along the timeline / a capsule's bottom edge"), meaning: tr("改时间 / 改时长", "Move / change length"))
+                ReferenceRow(example: tr("点时间轴上的空闲时段", "Click free time on the timeline"), meaning: tr("在那个时间加一项", "Add a task then"))
                 ReferenceRow(example: "⌘1 – ⌘5 · ⌘N · Esc", meaning: tr("切换分组（⌘5 专注）· 新任务 · 收起", "Switch list (⌘5 Focus) · New task · Collapse"))
             }
 

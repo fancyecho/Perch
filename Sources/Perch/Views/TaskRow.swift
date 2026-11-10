@@ -10,6 +10,10 @@ struct TaskRow: View {
     var showsDay = true
     /// Set when the row sits on the Today timeline.
     var timeline: TimelineNode?
+    /// Where the timeline's rows sit, for reading a dragged task's new time off them.
+    var layout: TimelineLayout?
+    /// The task currently picked up, so the timeline can draw it above its neighbours.
+    var lifted: Binding<TimelineLift?> = .constant(nil)
 
     @Environment(TaskStore.self) private var store
     @Environment(SwipeTracker.self) private var swipe
@@ -22,8 +26,25 @@ struct TaskRow: View {
     @State private var draft = ""
     @State private var editorFocusRequest = 0
     @State private var editingSchedule = false
+    /// The task being carried to a new time, or stretched to a new length (timeline only).
+    @State private var liveDrag: TimelineDrag?
+    /// While dragging: how far the pointer has moved on screen, and where the list was scrolled
+    /// when the drag began. The two together say how far along the timeline the task has gone.
+    @State private var pointerTravel: CGFloat = 0
+    @State private var scrollAtStart: CGFloat = 0
+    @Environment(TimelineScroller.self) private var scroller: TimelineScroller?
+    @State private var hoveringCapsule = false
     @AppStorage(Pref.taskDefaultColor) private var defaultColor = TaskColor.coral.rawValue
     @AppStorage(Pref.taskTopicColors) private var topicColors = true
+
+    #if DEBUG
+    /// Lets a snapshot show a row mid-drag.
+    static var debugDrag: (id: UUID, drag: TimelineDrag)?
+    private var timeDrag: TimelineDrag? { liveDrag ?? (Self.debugDrag?.id == task.id ? Self.debugDrag?.drag : nil) }
+    #else
+    private var timeDrag: TimelineDrag? { liveDrag }
+    #endif
+    private var isMoving: Bool { timeDrag?.mode == .move }
 
     private var offset: CGFloat { (swipe.rowID == task.id ? swipe.offset : 0) + dragOffset }
     private var isChecked: Bool { task.isDone || completing }
@@ -37,10 +58,18 @@ struct TaskRow: View {
             content
                 .offset(x: timeline == nil ? offset : 0)
         }
-        .clipShape(.rect(cornerRadius: 10, style: .continuous))
-        // Outside the clip, so the line can bridge the gap to the next row.
+        // The clip is for swipes; in the air it opens up so the capsule's shadow isn't cut off.
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous).inset(by: isMoving ? -24 : 0))
+        // Picked up, the task itself slides along the line under the pointer (the rest of the
+        // timeline fades back so it reads clearly over the rows it passes).
+        .offset(y: isMoving ? timeDrag?.shownTranslation ?? 0 : 0)
+        // Outside the clip, so the line can bridge the gap to the next row. It stays behind when
+        // the row is picked up, with an outline of where the task was.
         .background {
-            if let timeline { TimelineTrack(node: timeline) }
+            if let timeline {
+                TimelineTrack(node: isMoving ? vacated(timeline) : dragged(timeline))
+                if isMoving { originGhost(timeline) }
+            }
         }
         .contentShape(.rect)
         .onHover { hovering in
@@ -48,6 +77,12 @@ struct TaskRow: View {
             swipe.hover(task.id, hovering)
         }
         .simultaneousGesture(dragToSwipe)
+        // The list scrolling under a task being carried takes it further along the line.
+        .onChange(of: liveDrag == nil ? nil : scroller?.offset) { _, scrolled in
+            guard var drag = liveDrag, let scrolled else { return }
+            drag.translation = pointerTravel + scrolled - scrollAtStart
+            liveDrag = drag
+        }
         .onChange(of: abs(offset) >= SwipeTracker.threshold) { Haptics.tick() }
         .contextMenu { TaskMenu(task: task, onEdit: beginEditing, onSchedule: { editingSchedule = true }) }
     }
@@ -69,13 +104,15 @@ struct TaskRow: View {
     /// On the Today timeline: time column, capsule, then the text, with the checkbox at the end.
     /// A swipe moves only the text card: the time and capsule stay on the line, the capsule fills
     /// as a right swipe nears "done" and fades as a left swipe nears "tomorrow".
-    private func timelineContent(_ node: TimelineNode) -> some View {
+    private func timelineContent(_ base: TimelineNode) -> some View {
+        let node = dragged(base)
         let completing = offset > 0
         let armed = swipeFraction >= 1
         return HStack(spacing: TimelineMetrics.spacing) {
-            TimelineTimes(node: node)
+            TimelineTimes(node: node, accent: timeDrag == nil ? nil : task.tint.color)
                 .contentShape(.rect)
                 .onTapGesture { if !isChecked { editingSchedule = true } }
+                .gesture(retimeGesture(.move), including: canRetime(node) ? .all : .subviews)
             TimelineCapsule(
                 tint: task.tint.color,
                 glyph: completing && armed ? .symbol("checkmark") : task.glyph,
@@ -85,10 +122,25 @@ struct TaskRow: View {
                 interactive: offset != 0,
                 width: node.isCollapsed ? TimelineMetrics.collapsedSize : TimelineMetrics.capsuleWidth
             )
+            .overlay(alignment: .bottom) {
+                if canRetime(node) { resizeHandle(node) }
+            }
+            // In the air it is solid, so the line and the capsules it passes don't show through.
+            .background {
+                if isMoving { Capsule(style: .circular).fill(Color(nsColor: .windowBackgroundColor)) }
+            }
+            .scaleEffect(isMoving ? 1.08 : 1)
+            .shadow(color: task.tint.color.opacity(timeDrag == nil ? 0 : 0.4), radius: isMoving ? 8 : 5, y: isMoving ? 4 : 2)
+            .contentShape(Capsule(style: .circular))
+            .pointerStyle(canRetime(node) ? (isMoving ? .grabActive : .grabIdle) : .default)
+            .onHover { hovering in withAnimation(.easeOut(duration: 0.15)) { hoveringCapsule = hovering } }
+            .gesture(retimeGesture(.move), including: canRetime(node) ? .all : .subviews)
+            .help(canRetime(node) ? tr("拖到新的时间，拖下边缘改时长", "Drag to a new time, drag the bottom edge to change the length") : "")
             .frame(width: TimelineMetrics.capsuleWidth)
             .opacity(offset < 0 ? 1 - 0.45 * swipeFraction : 1)
             .scaleEffect(offset < 0 ? 1 - 0.06 * swipeFraction : 1)
             .padding(.trailing, 2)
+            .animation(.spring(duration: 0.3, bounce: 0.3), value: timeDrag?.mode)
 
             ZStack(alignment: completing ? .leading : .trailing) {
                 if offset != 0 { timelineSwipeReveal(completing: completing, armed: armed) }
@@ -96,15 +148,138 @@ struct TaskRow: View {
                     .offset(x: offset)
                     .opacity(1 - 0.35 * swipeFraction)
             }
-            .clipShape(.rect(cornerRadius: 10, style: .continuous))
+            // Clipped only while it slides, so the rounded corner never shaves the edge of the
+            // text at rest.
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous).inset(by: offset == 0 ? -12 : 0))
+            // The text picks the task up too; a sideways drag is still a swipe.
+            .simultaneousGesture(retimeGesture(.move, minimumDistance: 6), including: canRetime(node) ? .all : .subviews)
         }
         .padding(.vertical, node.isCollapsed ? 3 : 7)
         .padding(.horizontal, 8)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background {
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(Color.primary.opacity(hovering || offset != 0 ? 0.035 : 0))
+                .fill(Color.primary.opacity((hovering || offset != 0) && !isMoving ? 0.035 : 0))
         }
+    }
+
+    // MARK: - Dragging on the timeline
+
+    private func canRetime(_ node: TimelineNode) -> Bool {
+        task.hasTime && !isChecked && !node.isCollapsed && !isEditing && offset == 0
+    }
+
+    /// The node as it would be with the drag in progress applied: new times, a capsule as tall
+    /// as the new length, and the detail line in the task's color.
+    private func dragged(_ node: TimelineNode) -> TimelineNode {
+        guard let drag = timeDrag, let result = dragResult(drag) else { return node }
+        var node = node
+        let end = result.start.addingTimeInterval(Double(result.minutes) * 60)
+        node.start = result.start
+        node.height = TimelineMetrics.capsuleHeight(minutes: result.minutes)
+        node.end = node.height >= 44 ? end : nil
+        node.hint = DateText.duration(result.minutes)
+        node.detail = "\(DateText.time(result.start)) – \(DateText.time(end)) · \(DateText.duration(result.minutes))"
+        node.isLate = false
+        return node
+    }
+
+    /// The row's place on the line once the task has been lifted out of it: just the line.
+    private func vacated(_ node: TimelineNode) -> TimelineNode {
+        var node = node
+        node.height = 0
+        return node
+    }
+
+    /// A dashed outline where the task was picked up from.
+    private func originGhost(_ node: TimelineNode) -> some View {
+        let tint = task.tint.color
+        return Capsule(style: .circular)
+            .strokeBorder(tint.opacity(0.35), style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
+            .frame(width: TimelineMetrics.capsuleWidth, height: node.height)
+            .padding(.leading, TimelineMetrics.lineX - TimelineMetrics.capsuleWidth / 2)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+            .transition(.opacity)
+            .allowsHitTesting(false)
+    }
+
+    private func dragResult(_ drag: TimelineDrag) -> TimelineDrag.Result? {
+        guard let start = task.schedule?.time else { return nil }
+        return drag.result(start: start, minutes: task.minutes, calendar: AppSettings.shared.calendar)
+    }
+
+    /// A short bar along the capsule's foot: grab it to stretch or shrink the task.
+    private func resizeHandle(_ node: TimelineNode) -> some View {
+        let active = timeDrag?.mode == .resize
+        return Capsule()
+            .fill(Color.white.opacity(active ? 0.95 : 0.8))
+            .frame(width: active ? 14 : 10, height: 3)
+            .shadow(color: .black.opacity(0.15), radius: 1, y: 0.5)
+            .opacity(hoveringCapsule || active ? 1 : 0)
+            .padding(.bottom, 4)
+            .frame(width: TimelineMetrics.capsuleWidth, height: min(12, node.height / 2.5), alignment: .bottom)
+            .contentShape(.rect)
+            .pointerStyle(.frameResize(position: .bottom))
+            .highPriorityGesture(retimeGesture(.resize))
+    }
+
+    private func retimeGesture(_ mode: TimelineDrag.Mode, minimumDistance: CGFloat = 2) -> some Gesture {
+        // Measured on screen, not in the row: the row moves with the drag, and measuring in its
+        // own space would feed that movement back into the drag and make it shake. Scrolling is
+        // added on top, so a task carried to the edge keeps going as the list scrolls under it.
+        DragGesture(minimumDistance: minimumDistance, coordinateSpace: .global)
+            .onChanged { value in
+                var next: TimelineDrag
+                if let drag = liveDrag {
+                    // The foot's own gesture outranks the capsule's, but not the text's.
+                    guard drag.mode == mode else { return }
+                    next = drag
+                } else {
+                    // Sideways is a swipe; only an up-or-down drag picks the task up.
+                    guard offset == 0, abs(value.translation.height) > abs(value.translation.width) else { return }
+                    next = beginDrag(mode)
+                    scrollAtStart = scroller?.offset ?? 0
+                }
+                pointerTravel = value.translation.height
+                next.translation = pointerTravel + (scroller?.offset ?? 0) - scrollAtStart
+                // A soft detent at every step, and as the task clicks against a neighbour.
+                if liveDrag.flatMap(dragResult) != dragResult(next) { Haptics.tick() }
+                liveDrag = next
+                scroller?.follow(pointer: value.location.y)
+            }
+            .onEnded { _ in
+                guard let drag = liveDrag, drag.mode == mode else { return }
+                scroller?.stop()
+                let result = dragResult(drag)
+                // One spring carries the card from where it was let go into its new slot.
+                withAnimation(.spring(duration: 0.4, bounce: 0.18)) {
+                    liveDrag = nil
+                    if lifted.wrappedValue?.id == task.id { lifted.wrappedValue?.isSettling = true }
+                    if let result { store.retime(task.id, start: result.start, minutes: result.minutes) }
+                }
+                // It stays on top until it has settled into its slot.
+                Task {
+                    try? await Task.sleep(for: .milliseconds(450))
+                    if liveDrag == nil, lifted.wrappedValue?.id == task.id { lifted.wrappedValue = nil }
+                }
+            }
+    }
+
+    /// A drag starts by fixing the timeline as it stands, so the times under the pointer don't
+    /// shift while the task is in the air.
+    private func beginDrag(_ mode: TimelineDrag.Mode) -> TimelineDrag {
+        var drag = TimelineDrag(mode: mode, translation: 0)
+        let id = task.id.uuidString
+        if mode == .move, let layout, let top = layout.capsuleTop(of: id) {
+            drag.origin = top
+            drag.ruler = layout.ruler()
+            drag.magnets = layout.magnets(for: id, minutes: task.minutes)
+        }
+        if mode == .move {
+            withAnimation(.easeOut(duration: 0.2)) { lifted.wrappedValue = TimelineLift(id: task.id) }
+        }
+        Haptics.confirm()
+        return drag
     }
 
     /// The pill that opens up behind the sliding card: next to the capsule for "done", in the
@@ -174,12 +349,19 @@ struct TaskRow: View {
     private func expandedText(_ node: TimelineNode) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             if let detail = node.detail {
-                Text(detail)
-                    .font(.system(size: 11, weight: .medium).monospacedDigit())
-                    .foregroundStyle(detailColor(node))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.85)
-                    .contentTransition(.numericText())
+                HStack(spacing: 4) {
+                    Text(detail)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.85)
+                        .contentTransition(.numericText())
+                    if task.recurrence != nil {
+                        Image(systemName: "repeat")
+                            .imageScale(.small)
+                            .help(task.recurrence?.title ?? "")
+                    }
+                }
+                .font(.system(size: 11, weight: .medium).monospacedDigit())
+                .foregroundStyle(detailColor(node))
             }
             title(weight: .medium, size: 13.5)
             tagLine
@@ -201,8 +383,12 @@ struct TaskRow: View {
 
     @ViewBuilder
     private var tagLine: some View {
-        if !task.tags.isEmpty || isFocusTask {
+        if !task.tags.isEmpty || isFocusTask || (task.recurrence != nil && !task.hasTime) {
             HStack(spacing: 8) {
+                if let recurrence = task.recurrence, !task.hasTime {
+                    Label(recurrence.title, systemImage: "repeat")
+                        .foregroundStyle(.secondary)
+                }
                 if isFocusTask {
                     Label(tr("专注中", "Focusing"), systemImage: "scope")
                         .foregroundStyle(Color.accentColor)
@@ -277,7 +463,7 @@ struct TaskRow: View {
     @ViewBuilder
     private var metadata: some View {
         let dueLabel = DateText.dueLabel(task, now: now)
-        if dueLabel != nil || !task.tags.isEmpty || isFocusTask {
+        if dueLabel != nil || !task.tags.isEmpty || isFocusTask || task.recurrence != nil {
             HStack(spacing: 8) {
                 if isFocusTask {
                     Label(tr("专注中", "Focusing"), systemImage: "scope")
@@ -293,6 +479,10 @@ struct TaskRow: View {
                     .buttonStyle(.plain)
                     .disabled(isChecked)
                     .help(tr("修改日期和时间", "Change date and time"))
+                }
+                if let recurrence = task.recurrence {
+                    Label(recurrence.title, systemImage: "repeat")
+                        .foregroundStyle(.secondary)
                 }
                 ForEach(task.tags, id: \.self) { tag in
                     Text("#\(tag)").foregroundStyle(Color.accentColor.opacity(0.9))
@@ -357,7 +547,7 @@ struct TaskRow: View {
     }
 
     private func swipeDistance(_ value: DragGesture.Value) -> CGFloat? {
-        guard style == .regular, !isEditing, abs(value.translation.width) > abs(value.translation.height) else { return nil }
+        guard style == .regular, !isEditing, timeDrag == nil, abs(value.translation.width) > abs(value.translation.height) else { return nil }
         return SwipeTracker.rubberBand(value.translation.width)
     }
 
@@ -448,6 +638,19 @@ struct TaskMenu: View {
                     }
                 }
             }
+            Menu(tr("重复", "Repeat")) {
+                let weekday = task.day(in: AppSettings.shared.calendar)?.mondayIndex ?? DateText.today(.now).mondayIndex
+                ForEach(RepeatChoice.all(weekday: weekday), id: \.label) { choice in
+                    Toggle(choice.label, isOn: Binding(
+                        get: { choice.matches(task.recurrence) },
+                        set: { _ in withAnimation(.snappy) { store.setRecurrence(task.id, choice.rule) } }
+                    ))
+                }
+                if task.recurrence != nil {
+                    Divider()
+                    Button(tr("跳过这次", "Skip This One")) { withAnimation(.snappy) { store.skip(task.id) } }
+                }
+            }
             Menu(tr("颜色", "Color")) {
                 Toggle(tr("自动", "Automatic"), isOn: Binding(
                     get: { task.color == nil },
@@ -477,6 +680,30 @@ struct TaskMenu: View {
         }
         Divider()
         Button(tr("删除", "Delete"), role: .destructive) { withAnimation(.snappy) { store.delete(task.id) } }
+    }
+}
+
+/// The repeat rules a menu offers; "weekly" means on the task's own weekday.
+struct RepeatChoice {
+    let label: String
+    let rule: Recurrence?
+
+    static func all(weekday: Int) -> [RepeatChoice] {
+        [
+            RepeatChoice(label: tr("不重复", "Never"), rule: nil),
+            RepeatChoice(label: tr("每天", "Every Day"), rule: .daily),
+            RepeatChoice(label: tr("工作日", "Weekdays"), rule: .weekdays),
+            RepeatChoice(label: Recurrence.weekly([weekday]).title, rule: .weekly([weekday])),
+            RepeatChoice(label: tr("每月", "Monthly"), rule: .monthly),
+        ]
+    }
+
+    func matches(_ recurrence: Recurrence?) -> Bool {
+        switch (rule, recurrence) {
+        case (nil, nil), (.daily?, .daily?), (.weekdays?, .weekdays?), (.monthly?, .monthly?): true
+        case (.weekly?, .weekly?): rule == recurrence
+        default: false
+        }
     }
 }
 

@@ -13,6 +13,8 @@ struct InputField: NSViewRepresentable {
     /// Bump to move keyboard focus into the field.
     var focusRequest = 0
     var focusOnAppear = false
+    /// Focusing puts the caret after the text instead of selecting it (for prefilled text).
+    var caretAtEnd = false
     var onSubmit: (String) -> Void
     var onCancel: () -> Void = {}
     var onFocusChange: (Bool) -> Void = { _ in }
@@ -60,6 +62,9 @@ struct InputField: NSViewRepresentable {
         Task {
             try? await Task.sleep(for: .milliseconds(60))
             field.window?.makeFirstResponder(field)
+            if caretAtEnd, let editor = field.currentEditor() {
+                editor.selectedRange = NSRange(location: (editor.string as NSString).length, length: 0)
+            }
         }
     }
 

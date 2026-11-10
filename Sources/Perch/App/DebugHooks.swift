@@ -50,6 +50,10 @@ extension AppDelegate {
         case "alert":
             _ = island?.showAlert(SystemAlert(id: "debug", kind: .hot, title: tr("CPU 温度 96°C", "CPU at 96°C"),
                                               detail: tr("已经持续一分钟以上处于高温，可以看看是哪个进程在满负荷运行。", "It has been this hot for over a minute.")))
+        case "review": island?.debugReview()
+        case "remind":
+            // remind[:start]: the first timed open task's reminder, as the island would show it.
+            island?.debugRemind(start: parts.dropFirst().first == "start")
         case "glow":
             switch parts.dropFirst().first {
             case "celebration": island?.celebrate()

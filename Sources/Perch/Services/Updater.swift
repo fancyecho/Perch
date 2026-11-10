@@ -8,6 +8,9 @@ nonisolated struct AppRelease: Equatable, Sendable {
     let pageURL: URL
     let archiveURL: URL
     let signatureURL: URL
+    /// The same two files through GitHub's API, used when the download links fail.
+    var archiveAPIURL: URL?
+    var signatureAPIURL: URL?
 }
 
 /// Self-updates from GitHub Releases.
@@ -89,10 +92,9 @@ final class Updater {
         do {
             try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
 
-            let (downloaded, _) = try await URLSession.shared.download(from: release.archiveURL)
             let archive = work.appending(path: "update.zip")
-            try FileManager.default.moveItem(at: downloaded, to: archive)
-            let (signature, _) = try await URLSession.shared.data(from: release.signatureURL)
+            try FileManager.default.moveItem(at: try await Self.download(release.archiveURL, fallback: release.archiveAPIURL), to: archive)
+            let signature = try await Self.fetch(release.signatureURL, fallback: release.signatureAPIURL)
             try Self.verify(archive: archive, signature: signature)
 
             let unpacked = work.appending(path: "unpacked")
@@ -146,7 +148,9 @@ final class Updater {
             notes: payload.body ?? "",
             pageURL: payload.htmlURL,
             archiveURL: archive.downloadURL,
-            signatureURL: signature.downloadURL
+            signatureURL: signature.downloadURL,
+            archiveAPIURL: archive.apiURL,
+            signatureAPIURL: signature.apiURL
         )
     }
 
@@ -154,10 +158,12 @@ final class Updater {
         struct Asset: Decodable {
             let name: String
             let downloadURL: URL
+            let apiURL: URL?
 
             enum CodingKeys: String, CodingKey {
                 case name
                 case downloadURL = "browser_download_url"
+                case apiURL = "url"
             }
         }
 
@@ -184,6 +190,80 @@ final class Updater {
             if x != y { return x > y }
         }
         return false
+    }
+
+    // MARK: - Downloads
+
+    /// GitHub's download servers sometimes answer with an error page (a 504, say) instead of the
+    /// file; that page must never be taken for the update. Server hiccups get two more tries.
+    /// When the download link keeps failing, the same file comes through GitHub's API, which is
+    /// served from elsewhere and has stayed up through outages of the download servers.
+    nonisolated static func download(_ url: URL, fallback: URL? = nil) async throws -> URL {
+        try await withFallback(fallback) {
+            try await retrying {
+                let (file, response) = try await URLSession.shared.download(for: request(url))
+                try requireSuccess(response)
+                return file
+            }
+        } viaAPI: { api in
+            let (file, response) = try await URLSession.shared.download(for: request(api, asAsset: true))
+            try requireSuccess(response)
+            return file
+        }
+    }
+
+    nonisolated static func fetch(_ url: URL, fallback: URL? = nil) async throws -> Data {
+        try await withFallback(fallback) {
+            try await retrying {
+                let (data, response) = try await URLSession.shared.data(for: request(url))
+                try requireSuccess(response)
+                return data
+            }
+        } viaAPI: { api in
+            let (data, response) = try await URLSession.shared.data(for: request(api, asAsset: true))
+            try requireSuccess(response)
+            return data
+        }
+    }
+
+    private nonisolated static func request(_ url: URL, asAsset: Bool = false) -> URLRequest {
+        var request = URLRequest(url: url, timeoutInterval: 60)
+        // Never a stale copy: a cached error page would fail every retry.
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        if asAsset { request.setValue("application/octet-stream", forHTTPHeaderField: "Accept") }
+        return request
+    }
+
+    private nonisolated static func withFallback<T: Sendable>(
+        _ api: URL?,
+        _ primary: @Sendable () async throws -> T,
+        viaAPI: @Sendable (URL) async throws -> T
+    ) async throws -> T {
+        do {
+            return try await primary()
+        } catch {
+            guard let api else { throw error }
+            return try await viaAPI(api)
+        }
+    }
+
+    /// Anything but a 2xx from a web server is an error. Local files (a test feed) have no status.
+    nonisolated static func requireSuccess(_ response: URLResponse) throws {
+        guard let http = response as? HTTPURLResponse else { return }
+        guard (200..<300).contains(http.statusCode) else { throw UpdateError.download(http.statusCode) }
+    }
+
+    private nonisolated static func retrying<T: Sendable>(_ attempt: @Sendable () async throws -> T) async throws -> T {
+        var delay = Duration.seconds(2)
+        for _ in 0..<2 {
+            do {
+                return try await attempt()
+            } catch UpdateError.download(let code) where code >= 500 || code == 429 {
+                try await Task.sleep(for: delay)
+                delay *= 2
+            }
+        }
+        return try await attempt()
     }
 
     nonisolated static func verify(archive: URL, signature: Data) throws {
@@ -251,7 +331,7 @@ final class Updater {
 }
 
 enum UpdateError: Error {
-    case noRelease, server(Int), missingAssets, noPublicKey, badSignature, unexpectedBundle, notWritable(String), toolFailed(String)
+    case noRelease, server(Int), download(Int), missingAssets, noPublicKey, badSignature, unexpectedBundle, notWritable(String), toolFailed(String)
 }
 
 extension UpdateError {
@@ -259,6 +339,9 @@ extension UpdateError {
         switch self {
         case .noRelease: tr("还没有发布的版本", "No release has been published yet")
         case .server(let code): tr("服务器返回 \(code)", "Server responded with \(code)")
+        case .download(let code) where code >= 500:
+            tr("GitHub 暂时没有响应（\(code)），稍后再试", "GitHub isn't responding right now (\(code)). Try again in a bit")
+        case .download(let code): tr("下载更新失败（\(code)）", "Couldn't download the update (\(code))")
         case .missingAssets: tr("发布中缺少安装包或签名", "The release is missing its archive or signature")
         case .noPublicKey: tr("应用中缺少更新公钥", "This build has no update public key")
         case .badSignature: tr("安装包签名校验失败，已拒绝安装", "The update's signature didn't verify, so it wasn't installed")

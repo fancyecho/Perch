@@ -151,6 +151,7 @@ private struct QuickAddField: View {
                     placeholder: tr("添加任务，如「明天下午3点 写周报 !!」", "Add a task, e.g. “Report tomorrow 3pm !!”"),
                     focusRequest: model.inputFocusRequest,
                     focusOnAppear: true,
+                    caretAtEnd: true,
                     onSubmit: submit,
                     onCancel: cancel,
                     onFocusChange: { focused = $0 }
@@ -196,6 +197,9 @@ private struct QuickAddField: View {
                     if let minutes = parsed.duration {
                         Chip(text: DateText.duration(minutes), symbol: "hourglass", tint: .teal)
                     }
+                    if let rule = parsed.recurrence {
+                        Chip(text: rule.title, symbol: "repeat", tint: .indigo)
+                    }
                     if parsed.priority != .none {
                         Chip(text: tr("\(parsed.priority.title)优先级", "\(parsed.priority.title) priority"), symbol: "flag.fill", tint: parsed.priority.tint)
                     }
@@ -206,6 +210,12 @@ private struct QuickAddField: View {
                 .padding(.leading, 4)
                 .transition(.opacity.combined(with: .move(edge: .top)))
             }
+        }
+        .onChange(of: model.prefill) { _, value in
+            guard let value else { return }
+            text = value
+            model.prefill = nil
+            model.inputFocusRequest += 1
         }
         .animation(.snappy(duration: 0.22), value: hasChips(parsed))
         .animation(.snappy(duration: 0.22), value: parsed.title.isEmpty)
@@ -221,7 +231,7 @@ private struct QuickAddField: View {
     }
 
     private func hasChips(_ parsed: ParsedInput) -> Bool {
-        parsed.hasExplicitDate || parsed.priority != .none || !parsed.tags.isEmpty || parsed.duration != nil
+        parsed.hasExplicitDate || parsed.priority != .none || !parsed.tags.isEmpty || parsed.duration != nil || parsed.recurrence != nil
     }
 
     /// " – 16:30" after a start time, when the text gave a length.
@@ -370,7 +380,13 @@ private struct TaskList: View {
     let now: Date
     @Environment(TaskStore.self) private var store
     @AppStorage(Pref.todayTimeline) private var showsTimeline = true
+    // Read so the evening review card appears and leaves with its settings.
+    @AppStorage(Pref.reviewEnabled) private var reviewEnabled = true
+    @AppStorage(Pref.reviewTime) private var reviewTime = 21 * 60 + 30
+    @AppStorage(Pref.reviewDismissedDay) private var reviewDismissedDay = ""
     @State private var showsDoneToday = false
+    @State private var scroller = TimelineScroller()
+    @State private var position = ScrollPosition()
 
     var body: some View {
         ScrollView {
@@ -386,9 +402,33 @@ private struct TaskList: View {
             .padding(.horizontal, 8)
             .padding(.bottom, 60)
         }
+        // A task carried to the top or bottom edge scrolls the list along with it.
+        .scrollPosition($position)
+        .onScrollGeometryChange(for: ScrollSpan.self) { geometry in
+            ScrollSpan(
+                offset: geometry.contentOffset.y,
+                lowest: -geometry.contentInsets.top,
+                highest: max(-geometry.contentInsets.top, geometry.contentSize.height + geometry.contentInsets.bottom - geometry.containerSize.height)
+            )
+        } action: { _, span in
+            scroller.update(offset: span.offset, range: span.lowest...span.highest)
+        }
+        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { scroller.viewport = $0 }
+        .onAppear {
+            let position = $position
+            scroller.scrollTo = { y in position.wrappedValue.scrollTo(y: y) }
+        }
+        .onDisappear { scroller.stop() }
+        .environment(scroller)
         .slimScrollIndicator()
         .id(tab)
         .transition(.opacity)
+    }
+
+    private struct ScrollSpan: Equatable {
+        var offset: CGFloat
+        var lowest: CGFloat
+        var highest: CGFloat
     }
 
     @ViewBuilder
@@ -399,6 +439,13 @@ private struct TaskList: View {
         // Finished timed tasks keep their place on the timeline, so the day reads as a whole.
         let doneOnTimeline = showsTimeline ? allDoneToday.filter { $0.hasTime && DateText.isDueToday($0, now: now) } : []
         let doneToday = allDoneToday.filter { task in !doneOnTimeline.contains { $0.id == task.id } }
+        let _ = (reviewEnabled, reviewTime, reviewDismissedDay)
+        let tonight = EveningReview.isDue(now: now) ? store.leftoversTonight(now: now) : []
+
+        if !tonight.isEmpty {
+            LeftoverCard(kind: .tonight, tasks: tonight, now: now)
+                .transition(.opacity.combined(with: .move(edge: .top)))
+        }
 
         if overdue.isEmpty && due.isEmpty && doneOnTimeline.isEmpty {
             EmptyState(
@@ -408,15 +455,19 @@ private struct TaskList: View {
             )
         }
         if !overdue.isEmpty {
-            SectionHeader(title: tr("已逾期", "Overdue"), tint: .red)
-            rows(overdue)
+            // Days already gone don't hang around as "overdue": each one is settled in a tap.
+            LeftoverCard(kind: .earlier, tasks: overdue, now: now)
+                .transition(.opacity.combined(with: .move(edge: .top)))
         }
         if !due.isEmpty || !doneOnTimeline.isEmpty {
             if !overdue.isEmpty { SectionHeader(title: tr("今天", "Today")) }
             if showsTimeline {
-                // TodayTimeline's body is a ForEach, so a modifier on it would land on every row.
                 if overdue.isEmpty { Color.clear.frame(height: 6) }
+                // One block rather than lazy rows: every row is laid out, so a task carried
+                // along the line can read times off all of them, and its own row stays alive
+                // however far the list scrolls while it's in the air.
                 TodayTimeline(tasks: due + doneOnTimeline, now: now)
+                    .zIndex(1)
             } else {
                 rows(due)
             }

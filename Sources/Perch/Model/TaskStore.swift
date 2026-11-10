@@ -55,7 +55,8 @@ final class TaskStore {
     func add(_ input: ParsedInput) -> TaskItem? {
         let title = input.title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !title.isEmpty else { return nil }
-        let item = TaskItem(title: title, schedule: input.schedule, priority: input.priority, tags: input.tags, duration: input.duration)
+        let item = TaskItem(title: title, schedule: input.schedule, priority: input.priority, tags: input.tags,
+                            duration: input.duration, recurrence: input.recurrence)
         tasks.append(item)
         changed()
         return item
@@ -68,15 +69,75 @@ final class TaskStore {
         let wasForToday = task.day(in: calendar).map { $0 <= Day(.now, in: calendar) } ?? false
         update(id) { $0.completedAt = .now }
         if focus?.taskID == id { focus = nil }
-        announce(tr("已完成「\(task.title)」", "Completed “\(task.title)”"), undo: snapshot)
+        if let next = nextOccurrence(of: task) {
+            tasks.append(next)
+            let when = DateText.dueLabel(next, now: .now) ?? ""
+            announce(tr("已完成「\(task.title)」· 下次 \(when)", "Completed “\(task.title)” · next \(when)"), undo: snapshot)
+        } else {
+            announce(tr("已完成「\(task.title)」", "Completed “\(task.title)”"), undo: snapshot)
+        }
         changed()
         let progress = progress(now: .now)
         onComplete?(wasForToday && progress.done == progress.total, playsSound)
     }
 
     func reopen(_ id: UUID) {
+        guard let task = task(id), task.isDone else { return }
         update(id) { $0.completedAt = nil }
+        // A repeating task brought back takes the place of the one its completion added.
+        if let next = nextOccurrence(of: task) {
+            tasks.removeAll { other in
+                !other.isDone && other.id != id && other.title == task.title && other.recurrence == task.recurrence
+                    && other.schedule == next.schedule
+            }
+        }
         changed()
+    }
+
+    /// Skips this time of a repeating task: it moves on to its next day.
+    func skip(_ id: UUID) {
+        guard let task = task(id), let next = nextOccurrence(of: task) else { return }
+        let snapshot = currentSnapshot
+        update(id) { $0.schedule = next.schedule }
+        let when = DateText.dueLabel(next, now: .now) ?? ""
+        announce(tr("跳过这次，下次 \(when)", "Skipped · next \(when)"), undo: snapshot)
+        changed()
+    }
+
+    /// Makes a task repeat, or stop. A task without a date starts today; one on a day the rule
+    /// skips moves to the first day it allows.
+    func setRecurrence(_ id: UUID, _ recurrence: Recurrence?) {
+        guard let task = task(id), task.recurrence != recurrence else { return }
+        let cal = calendar
+        update(id) { item in
+            item.recurrence = recurrence
+            guard let recurrence else { return }
+            let current = item.day(in: cal) ?? Day(.now, in: cal)
+            let day = recurrence.first(onOrAfter: current)
+            item.schedule = Self.moving(item.schedule, to: day, in: cal) ?? .day(day)
+        }
+        changed()
+    }
+
+    /// The copy of a repeating task that comes after this one: on the next matching day after
+    /// its own, but never before today, at the same time of day.
+    func nextOccurrence(of task: TaskItem, now: Date = .now) -> TaskItem? {
+        guard let recurrence = task.recurrence, let day = task.day(in: calendar) else { return nil }
+        let today = Day(now, in: calendar)
+        var next = recurrence.next(after: day, anchor: day)
+        while next < today { next = recurrence.next(after: next, anchor: day) }
+        var copy = TaskItem(title: task.title, schedule: Self.moving(task.schedule, to: next, in: calendar), priority: task.priority,
+                            tags: task.tags, duration: task.duration, color: task.color, recurrence: recurrence)
+        copy.createdAt = now
+        return copy
+    }
+
+    /// The same schedule on another day, keeping the wall-clock time.
+    private static func moving(_ schedule: Schedule?, to day: Day, in cal: Calendar) -> Schedule? {
+        guard let schedule else { return nil }
+        guard let time = schedule.time else { return .day(day) }
+        let c = cal.dateComponents([.hour, .minute], from: time)
+        return .time(day.date(hour: c.hour ?? 9, minute: c.minute ?? 0, in: cal))
     }
 
     func delete(_ id: UUID) {
@@ -128,6 +189,32 @@ final class TaskStore {
         announce(tr("「\(task.title)」推迟到明天", "Moved “\(task.title)” to tomorrow"), undo: snapshot)
     }
 
+    /// Moves a leftover task to another day (keeping its time of day), with undo.
+    func carry(_ id: UUID, to day: Day) {
+        guard let task = task(id) else { return }
+        let snapshot = currentSnapshot
+        schedule(id, day: day)
+        let label = DateText.relativeDay(day, now: .now)
+        announce(tr("「\(task.title)」移到\(label)", "Moved “\(task.title)” to \(label.lowercased())"), undo: snapshot)
+    }
+
+    /// Moves every leftover on at once: repeating ones skip ahead, the rest go to `day`.
+    func carryAll(_ ids: [UUID], to day: Day) {
+        guard !ids.isEmpty else { return }
+        let snapshot = currentSnapshot
+        for id in ids {
+            guard let task = task(id) else { continue }
+            if let next = nextOccurrence(of: task) {
+                update(id) { $0.schedule = next.schedule }
+            } else {
+                schedule(id, day: day)
+            }
+        }
+        let label = DateText.relativeDay(day, now: .now)
+        announce(tr("已把 \(ids.count) 项移到\(label)", "Moved \(ids.count) to \(label.lowercased())"), undo: snapshot)
+        changed()
+    }
+
     /// Moves a timed task to start at `start`, keeping its length (used to clear an overlap).
     func startAfter(_ id: UUID, at start: Date) {
         guard let task = task(id), task.hasTime else { return }
@@ -137,12 +224,48 @@ final class TaskStore {
         changed()
     }
 
+    /// Moves a timed task and sets its length in one go, as dragging it on the timeline does.
+    func retime(_ id: UUID, start: Date, minutes: Int) {
+        guard let task = task(id), task.hasTime else { return }
+        let length = min(max(minutes, TaskItem.durationRange.lowerBound), TaskItem.durationRange.upperBound)
+        guard task.schedule?.time != start || task.minutes != length else { return }
+        let snapshot = currentSnapshot
+        update(id) { item in
+            item.schedule = .time(start)
+            if length != item.minutes { item.duration = length }
+        }
+        let end = start.addingTimeInterval(Double(length) * 60)
+        announce(tr("「\(task.title)」\(DateText.time(start)) – \(DateText.time(end))", "“\(task.title)” \(DateText.time(start)) – \(DateText.time(end))"), undo: snapshot)
+        changed()
+    }
+
     /// Sets how long a task lasts (nil goes back to the default length).
     func setDuration(_ id: UUID, minutes: Int?) {
         let value = minutes.map { min(max($0, TaskItem.durationRange.lowerBound), TaskItem.durationRange.upperBound) }
         guard let task = task(id), task.duration != value else { return }
         update(id) { $0.duration = value }
         changed()
+    }
+
+    /// Gives a timed task more time: its block ends `minutes` later than now or its end, whichever
+    /// is later (answering a reminder late still buys the full extra time).
+    func extend(_ id: UUID, by minutes: Int, now: Date = .now) {
+        guard let task = task(id), let start = task.schedule?.time, let end = task.end else { return }
+        let snapshot = currentSnapshot
+        let newEnd = max(end, now).addingTimeInterval(Double(minutes) * 60)
+        let length = Int((newEnd.timeIntervalSince(start) / 60).rounded(.up))
+        update(id) { $0.duration = min(length, TaskItem.durationRange.upperBound) }
+        announce(tr("「\(task.title)」延长到 \(DateText.time(newEnd))", "Extended “\(task.title)” to \(DateText.time(newEnd))"), undo: snapshot)
+        changed()
+    }
+
+    /// What a reminder's buttons do, on the island or in a notification.
+    func answer(_ action: ReminderAction, for id: UUID, now: Date = .now) {
+        switch action {
+        case .complete: complete(id)
+        case .snooze: reschedule(id, to: .time(now.addingTimeInterval(10 * 60)))
+        case .extend: extend(id, by: 15, now: now)
+        }
     }
 
     func setColor(_ id: UUID, _ color: TaskColor?) {
@@ -257,6 +380,15 @@ extension TaskStore {
     func dueToday(now: Date) -> [TaskItem] {
         let today = today(now)
         return sorted(tasks.filter { !$0.isDone && $0.day(in: calendar) == today })
+    }
+
+    /// What the evening review asks about: today's open tasks that have no time or whose time is over.
+    func leftoversTonight(now: Date) -> [TaskItem] {
+        let today = today(now)
+        return sorted(tasks.filter { task in
+            guard !task.isDone, task.day(in: calendar) == today else { return false }
+            return task.end.map { $0 <= now } ?? true
+        })
     }
 
     func doneToday(now: Date) -> [TaskItem] {

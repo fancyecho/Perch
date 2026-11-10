@@ -33,6 +33,8 @@ final class PanelModel {
     var anchor: Alignment = .topTrailing
     var isHovering = false
     var inputFocusRequest = 0
+    /// Text to put in the quick-add field (and focus it), e.g. a free slot's time.
+    var prefill: String?
     var tab: TaskTab = .today
     /// The panel is shown inside the notch island rather than the floating window.
     @ObservationIgnored var isInIsland = false

@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import SwiftUI
 import Testing
 @testable import Perch
 
@@ -237,6 +238,18 @@ struct TaskStoreTests {
         #expect(store.inbox().map(\.id) == [task.id])
     }
 
+    @Test func extendingAddsTimeFromTheLaterOfTheEndAndNow() {
+        let store = makeStore()
+        let start = Date(timeIntervalSince1970: 1_800_000_000)
+        let task = store.add(ParsedInput(title: "read", schedule: .time(start), duration: 30))!
+        // Answered on time: 30 + 15.
+        store.extend(task.id, by: 15, now: start.addingTimeInterval(30 * 60))
+        #expect(store.task(task.id)?.minutes == 45)
+        // Answered ten minutes after it ran out: still a full 15 from now.
+        store.extend(task.id, by: 15, now: start.addingTimeInterval(55 * 60))
+        #expect(store.task(task.id)?.minutes == 70)
+    }
+
     @Test func legacyFormatStillDecodes() throws {
         let json = """
         {"id":"FBD242D1-579F-4F84-AB20-A3E438164D9B","title":"old","due":"2026-10-23T04:00:00Z","hasTime":true,"priority":2,"tags":[],"createdAt":"2026-10-23T03:00:00Z"}
@@ -249,6 +262,18 @@ struct TaskStoreTests {
 }
 
 struct UpdaterTests {
+    /// A 504 page from GitHub's download servers must be an error, not an "update" whose
+    /// signature then fails.
+    @Test func errorPagesAreNotUpdates() throws {
+        let url = URL(string: "https://github.com/fancyecho/Perch/releases/download/v1/Perch-1.zip")!
+        let ok = try #require(HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil))
+        let timeout = try #require(HTTPURLResponse(url: url, statusCode: 504, httpVersion: nil, headerFields: nil))
+        #expect(throws: Never.self) { try Updater.requireSuccess(ok) }
+        #expect(throws: UpdateError.self) { try Updater.requireSuccess(timeout) }
+        // A local test feed has no status to check.
+        #expect(throws: Never.self) { try Updater.requireSuccess(URLResponse(url: URL(fileURLWithPath: "/tmp/a.zip"), mimeType: nil, expectedContentLength: 0, textEncodingName: nil)) }
+    }
+
     @Test func versionComparison() {
         #expect(Updater.isVersion("0.2.0", newerThan: "0.1.9"))
         #expect(Updater.isVersion("1.0", newerThan: "0.9.9"))
@@ -273,9 +298,10 @@ struct TimelineTests {
             switch entry.kind {
             case .task(let task, let node): "\(task.title):\(node.above.style)/\(node.below.style)\(node.hint == nil ? "" : "*")"
             case .now(let node): "now:\(node.above.style)/\(node.below.style)"
-            case .gap(let minutes, _): "gap\(minutes)"
+            case .gap(let from, let to, _): "gap\(Int(to.timeIntervalSince(from) / 60))"
             case .overlap(let overlap, _): "overlap\(overlap.minutes)"
             case .anytime(let node): "anytime:\(node.above.style)/\(node.below.style)"
+            case .edge(let edge, _, _): "\(edge)"
             }
         }
     }
@@ -456,5 +482,297 @@ struct FeedbackSoundTests {
         let clip = Clip(samples: (0..<48_000).map { Float(sin(Double($0) * 0.05)) }, sampleRate: 48_000)
         let up = clip.pitched(by: 12)
         #expect(abs(up.samples.count - 24_000) <= 1)
+    }
+}
+
+struct RecurrenceTests {
+    private let cal = calendar("Asia/Shanghai")
+    /// Friday 2026-10-23 10:00 in Shanghai
+    private var now: Date { moment(cal, 2026, 10, 23, 10) }
+    private var today: Day { Day(year: 2026, month: 10, day: 23) }
+
+    private func parse(_ text: String) -> ParsedInput {
+        QuickParser.parse(text, now: now, defaultDay: today, calendar: cal)
+    }
+
+    @Test func dailyAtATimeThatHasPassedStartsTomorrow() {
+        let parsed = parse("每天早上8点 背单词")
+        #expect(parsed.title == "背单词")
+        #expect(parsed.recurrence == .daily)
+        #expect(wallClock(parsed.schedule, cal) == DateComponents(year: 2026, month: 10, day: 24, hour: 8, minute: 0))
+    }
+
+    @Test func namedWeekdaysLandOnTheFirstOne() {
+        let parsed = parse("每周一三五 晚上7点 跑步")
+        #expect(parsed.title == "跑步")
+        #expect(parsed.recurrence == .weekly([0, 2, 4]))
+        // Friday at 19:00 hasn't happened yet: today.
+        #expect(wallClock(parsed.schedule, cal) == DateComponents(year: 2026, month: 10, day: 23, hour: 19, minute: 0))
+        let english = parse("Gym every mon and thu 7pm")
+        #expect(english.title == "Gym")
+        #expect(english.recurrence == .weekly([0, 3]))
+        #expect(wallClock(english.schedule, cal)?.day == 26)
+    }
+
+    @Test func otherRules() {
+        #expect(parse("工作日 站会").recurrence == .weekdays)
+        #expect(parse("weekdays standup").title == "standup")
+        #expect(parse("每周 周报").recurrence == .weekly([4]))
+        let monthly = parse("每月15号 交房租")
+        #expect(monthly.recurrence == .monthly)
+        #expect(monthly.schedule == .day(Day(year: 2026, month: 11, day: 15)))
+        #expect(monthly.title == "交房租")
+        #expect(parse("每周日 大扫除").schedule == .day(Day(year: 2026, month: 10, day: 25)))
+    }
+
+    @Test func nextDays() {
+        #expect(Recurrence.weekdays.next(after: today) == Day(year: 2026, month: 10, day: 26))
+        #expect(Recurrence.weekly([2]).next(after: today) == Day(year: 2026, month: 10, day: 28))
+        let jan31 = Day(year: 2027, month: 1, day: 31)
+        let feb = Recurrence.monthly.next(after: jan31)
+        #expect(feb == Day(year: 2027, month: 2, day: 28))
+        #expect(Recurrence.monthly.next(after: feb, anchor: jan31) == Day(year: 2027, month: 3, day: 31))
+        #expect(Recurrence(storageValue: Recurrence.weekly([4, 0]).storageValue) == .weekly([0, 4]))
+    }
+
+    @Test func completingBringsTheNextOneAndReopeningTakesItBack() {
+        let url = FileManager.default.temporaryDirectory.appending(path: "perch-tests-\(UUID().uuidString).json")
+        try? JSONEncoder.perch.encode(["tasks": [TaskItem]()]).write(to: url)
+        let store = TaskStore(fileURL: url)
+        let settingsCal = AppSettings.shared.calendar
+        let today = Day(.now, in: settingsCal)
+        let task = store.add(ParsedInput(title: "背单词", schedule: .time(today.date(hour: 8, minute: 0, in: settingsCal)), duration: 20, recurrence: .daily))!
+        store.complete(task.id)
+        let next = store.tasks.first { !$0.isDone }
+        #expect(next?.title == "背单词")
+        #expect(next?.recurrence == .daily)
+        #expect(next?.minutes == 20)
+        #expect(next.flatMap { $0.day(in: settingsCal) } == today.adding(days: 1))
+        #expect(next.flatMap { settingsCal.dateComponents([.hour], from: $0.schedule!.time!).hour } == 8)
+
+        store.reopen(task.id)
+        #expect(store.tasks.count == 1)
+        #expect(store.task(task.id)?.isDone == false)
+
+        store.skip(task.id)
+        #expect(store.task(task.id)?.day(in: settingsCal) == today.adding(days: 1))
+        let encoded = try! JSONEncoder.perch.encode(store.task(task.id)!)
+        #expect(try! JSONDecoder.perch.decode(TaskItem.self, from: encoded).recurrence == .daily)
+    }
+}
+
+struct TimelineDragTests {
+    private let cal = calendar("Asia/Shanghai")
+
+    @Test func movingSnapsToFiveMinutesAndStaysInTheDay() {
+        let start = moment(cal, 2026, 10, 23, 10)
+        let moved = TimelineDrag(mode: .move, translation: 47).result(start: start, minutes: 30, calendar: cal)
+        #expect(moved == .init(start: moment(cal, 2026, 10, 23, 10, 45), minutes: 30))
+        let late = TimelineDrag(mode: .move, translation: 900).result(start: moment(cal, 2026, 10, 23, 22), minutes: 60, calendar: cal)
+        #expect(late.start == moment(cal, 2026, 10, 23, 23))
+        let early = TimelineDrag(mode: .move, translation: -900).result(start: start, minutes: 30, calendar: cal)
+        #expect(early.start == moment(cal, 2026, 10, 23, 0))
+    }
+
+    @Test func resizingFollowsTheCapsuleAndNeverVanishes() {
+        let start = moment(cal, 2026, 10, 23, 10)
+        // 9pt at 0.6pt a minute is 15 minutes.
+        #expect(TimelineDrag(mode: .resize, translation: 9).result(start: start, minutes: 30, calendar: cal).minutes == 45)
+        #expect(TimelineDrag(mode: .resize, translation: -200).result(start: start, minutes: 30, calendar: cal).minutes == 5)
+        #expect(TimelineDrag(mode: .resize, translation: 5000).result(start: start, minutes: 30, calendar: cal).minutes == 14 * 60)
+    }
+
+    /// Two tasks an hour apart: 10:00–10:30 with its capsule at 100…139, then 11:30–12:00 at 200…239.
+    private func ruler() -> TimelineRuler {
+        TimelineRuler([
+            .init(y: 200, time: moment(cal, 2026, 10, 23, 11, 30)), .init(y: 239, time: moment(cal, 2026, 10, 23, 12)),
+            .init(y: 100, time: moment(cal, 2026, 10, 23, 10)), .init(y: 139, time: moment(cal, 2026, 10, 23, 10, 30)),
+        ])
+    }
+
+    @Test func aRulerReadsTimeOffTheRows() {
+        let ruler = ruler()
+        #expect(ruler.time(at: 100) == moment(cal, 2026, 10, 23, 10))
+        // Halfway down the squeezed hour of free time is half an hour in.
+        #expect(ruler.time(at: 169.5) == moment(cal, 2026, 10, 23, 11))
+        // Off either end, a point is a minute.
+        #expect(ruler.time(at: 70) == moment(cal, 2026, 10, 23, 9, 30))
+        #expect(ruler.time(at: 249) == moment(cal, 2026, 10, 23, 12, 10))
+        #expect(ruler.y(of: moment(cal, 2026, 10, 23, 11)) == 169.5)
+        #expect(ruler.y(of: moment(cal, 2026, 10, 23, 12, 10)) == 249)
+    }
+
+    @Test func timeNeverRunsBackwardsWhereTasksOverlap() {
+        let ruler = TimelineRuler([
+            .init(y: 0, time: moment(cal, 2026, 10, 23, 10)), .init(y: 60, time: moment(cal, 2026, 10, 23, 12)),
+            .init(y: 80, time: moment(cal, 2026, 10, 23, 11)), .init(y: 120, time: moment(cal, 2026, 10, 23, 13)),
+        ])
+        #expect(ruler.time(at: 70) == moment(cal, 2026, 10, 23, 12))
+        #expect(ruler.time(at: 100) == moment(cal, 2026, 10, 23, 12, 30))
+    }
+
+    @Test func aCarriedTaskTakesTheTimeWhereItIsSetDown() {
+        let start = moment(cal, 2026, 10, 23, 10)
+        // The first task, carried down past the second: its top at 249 is ten minutes after that one ends.
+        var drag = TimelineDrag(mode: .move, translation: 149, origin: 100, ruler: ruler())
+        #expect(drag.result(start: start, minutes: 30, calendar: cal).start == moment(cal, 2026, 10, 23, 12, 10))
+        // Barely moved, it hasn't gone anywhere.
+        drag.translation = 1
+        #expect(drag.result(start: start, minutes: 30, calendar: cal).start == start)
+    }
+
+    @Test func aCarriedTaskClicksAgainstItsNeighbours() {
+        // The second task ends at 12:07 now, which no five-minute step lands on.
+        let ruler = TimelineRuler([
+            .init(y: 100, time: moment(cal, 2026, 10, 23, 10)), .init(y: 139, time: moment(cal, 2026, 10, 23, 10, 30)),
+            .init(y: 200, time: moment(cal, 2026, 10, 23, 11, 30)), .init(y: 239, time: moment(cal, 2026, 10, 23, 12, 7)),
+        ])
+        let end = moment(cal, 2026, 10, 23, 12, 7)
+        var drag = TimelineDrag(mode: .move, translation: 142, origin: 100, ruler: ruler, magnets: [end])
+        #expect(drag.result(start: moment(cal, 2026, 10, 23, 10), minutes: 30, calendar: cal).start == end)
+        drag.translation = 150
+        #expect(drag.result(start: moment(cal, 2026, 10, 23, 10), minutes: 30, calendar: cal).start == moment(cal, 2026, 10, 23, 12, 20))
+    }
+
+    @Test func aCarriedTaskIsDrawnUnderThePointerOrFlushWithANeighbour() {
+        let ruler = TimelineRuler([
+            .init(y: 100, time: moment(cal, 2026, 10, 23, 10)), .init(y: 239, time: moment(cal, 2026, 10, 23, 12, 7)),
+        ])
+        var drag = TimelineDrag(mode: .move, translation: 60, origin: 100, ruler: ruler, magnets: [moment(cal, 2026, 10, 23, 12, 7)])
+        #expect(drag.shownTranslation == 60)
+        // Within reach of the neighbour's edge, it sits right on it.
+        drag.translation = 136
+        #expect(drag.shownTranslation == 139)
+    }
+
+    @Test func theLayoutBuildsARulerFromItsRows() {
+        let now = moment(cal, 2026, 10, 23, 9)
+        let first = TaskItem(title: "a", schedule: .time(moment(cal, 2026, 10, 23, 10)), duration: 30)
+        let second = TaskItem(title: "b", schedule: .time(moment(cal, 2026, 10, 23, 11, 30)), duration: 30)
+        let layout = TimelineLayout()
+        layout.update(TodayTimeline.entries(for: [first, second], now: now), now: now)
+        let height = TimelineMetrics.capsuleHeight(minutes: 30)
+        layout.frames[first.id.uuidString] = CGRect(x: 0, y: 100, width: 300, height: height + 14)
+        layout.frames[second.id.uuidString] = CGRect(x: 0, y: 200, width: 300, height: height + 14)
+        #expect(layout.capsuleTop(of: first.id.uuidString) == 107)
+        #expect(layout.ruler().time(at: 207) == moment(cal, 2026, 10, 23, 11, 30))
+        // The first could start when the second ends, end when it starts, or start now.
+        #expect(Set(layout.magnets(for: first.id.uuidString, minutes: 30)) == [moment(cal, 2026, 10, 23, 12), moment(cal, 2026, 10, 23, 11), now])
+    }
+
+    @Test func freeSlotPrefillParsesAsToday() {
+        let now = moment(cal, 2026, 10, 23, 16)
+        let parsed = QuickParser.parse("今天 9:00-10:00 读书", now: now, defaultDay: Day(year: 2026, month: 10, day: 23), calendar: cal)
+        #expect(wallClock(parsed.schedule, cal) == DateComponents(year: 2026, month: 10, day: 23, hour: 9, minute: 0))
+        #expect(parsed.duration == 60)
+        #expect(parsed.title == "读书")
+    }
+}
+
+struct LeftoverTests {
+    private func makeStore() -> TaskStore {
+        let url = FileManager.default.temporaryDirectory.appending(path: "perch-tests-\(UUID().uuidString).json")
+        try? JSONEncoder.perch.encode(["tasks": [TaskItem]()]).write(to: url)
+        return TaskStore(fileURL: url)
+    }
+
+    @Test func tonightAsksAboutWhatIsOverOrUntimed() {
+        let store = makeStore()
+        let cal = AppSettings.shared.calendar
+        let now = Date.now
+        let today = Day(now, in: cal)
+        let over = store.add(ParsedInput(title: "over", schedule: .time(now.addingTimeInterval(-3600)), duration: 30))!
+        let later = store.add(ParsedInput(title: "later", schedule: .time(now.addingTimeInterval(3600))))!
+        let untimed = store.add(ParsedInput(title: "untimed", schedule: .day(today)))!
+        _ = store.add(ParsedInput(title: "tomorrow", schedule: .day(today.adding(days: 1))))
+        let ids = Set(store.leftoversTonight(now: now).map(\.id))
+        // A task an hour ago may have started yesterday near midnight; only count it if it's today's.
+        let expected: Set<UUID> = Set([untimed.id] + (over.day(in: cal) == today ? [over.id] : []))
+        #expect(ids == expected)
+        #expect(!ids.contains(later.id))
+    }
+
+    @Test func carryingAllSkipsRepeatingOnesAhead() {
+        let store = makeStore()
+        let cal = AppSettings.shared.calendar
+        let today = Day(.now, in: cal)
+        let plain = store.add(ParsedInput(title: "plain", schedule: .day(today.adding(days: -2))))!
+        let daily = store.add(ParsedInput(title: "daily", schedule: .day(today.adding(days: -2)), recurrence: .daily))!
+        store.carryAll([plain.id, daily.id], to: today)
+        #expect(store.task(plain.id)?.day(in: cal) == today)
+        #expect(store.task(daily.id)?.day(in: cal) == today)
+        #expect(store.overdue(now: .now).isEmpty)
+        store.undo()
+        #expect(store.overdue(now: .now).count == 2)
+    }
+}
+
+@MainActor
+struct TimelineDayTests {
+    private let cal = AppSettings.shared.calendar
+    private let day = TimelineDay(start: 7 * 60, end: 23 * 60)
+
+    private func at(_ hour: Int, _ minute: Int = 0) -> Date { moment(cal, 2026, 11, 10, hour, minute) }
+
+    private func task(_ title: String, _ hour: Int, _ minute: Int = 0, lasting: Int = 60) -> TaskItem {
+        TaskItem(title: title, schedule: .time(at(hour, minute)), duration: lasting)
+    }
+
+    private func kinds(_ entries: [TodayTimeline.Entry]) -> [String] {
+        entries.map { entry in
+            switch entry.kind {
+            case .task(let task, _): task.title
+            case .now: "now"
+            case .gap: "gap"
+            case .overlap: "overlap"
+            case .anytime: "anytime"
+            case .edge(let edge, _, _): "\(edge)"
+            }
+        }
+    }
+
+    @Test func theLineRunsAcrossTheDay() {
+        let entries = TodayTimeline.entries(for: [task("read", 8), task("gym", 18, 30)], now: at(9, 20), day: day)
+        // No headings in between: noon and six are drawn behind the rows, not as rows.
+        #expect(kinds(entries) == ["open", "gap", "read", "now", "gym", "gap", "close"])
+    }
+
+    @Test func aLongTaskIsOneRowWhateverItCrosses() {
+        let entries = TodayTimeline.entries(for: [task("course", 11, 45, lasting: 390)], now: at(8), day: day)
+        #expect(kinds(entries) == ["open", "now", "course", "gap", "close"])
+    }
+
+    @Test func tasksOutsideTheDayStretchTheLine() {
+        let span = TodayTimeline.span(for: [task("early", 5, 30), task("late", 23, 15)], day: day, now: at(12))
+        #expect(span?.open == at(5))
+        #expect(span?.close == moment(cal, 2026, 11, 11, 0))
+    }
+
+    @Test func noTimedTasksNoSpan() {
+        #expect(TodayTimeline.span(for: [], day: day, now: at(9)) == nil)
+        #expect(TodayTimeline.span(for: [task("a", 9)], day: nil, now: at(9)) == nil)
+    }
+
+    @Test func aPartOfTheDayIsNamedInTheFirstClearSpot() {
+        // Afternoon starts 4pt into a long capsule whose start time is written at 108.
+        #expect(DayParts.labelY(start: 104, end: 300, clearOf: [108, 292]) == 121)
+        #expect(DayParts.labelY(start: 0, end: 20, clearOf: [10]) == nil)
+    }
+
+    @Test func theListScrollsFasterNearerTheEdge() {
+        #expect(TimelineScroller.speed(depth: 1) < TimelineScroller.speed(depth: 30))
+        #expect(TimelineScroller.speed(depth: 200) == TimelineScroller.topSpeed)
+    }
+
+    @Test func theEndsAreOnTheDragRuler() {
+        let morning = task("read", 8)
+        let entries = TodayTimeline.entries(for: [morning], now: at(7, 30), day: day)
+        let layout = TimelineLayout()
+        layout.update(entries, now: at(7, 30))
+        for (index, entry) in entries.enumerated() {
+            layout.frames[entry.id] = CGRect(x: 0, y: CGFloat(index) * 40, width: 300, height: 30)
+        }
+        // The line opens at seven: above the first task there is still time to read off.
+        #expect(layout.ruler().marks.first?.time == at(7))
     }
 }

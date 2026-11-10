@@ -141,28 +141,50 @@ struct IslandModelTests {
 
 struct ReminderClockTests {
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
+    private let both = ReminderTiming(atStart: true, atEnd: true)
+    private let endOnly = ReminderTiming(atStart: false, atEnd: true)
 
     @Test func picksTheNextTimedOpenTask() throws {
         let later = TaskItem(title: "later", schedule: .time(now.addingTimeInterval(3600)))
         let sooner = TaskItem(title: "sooner", schedule: .time(now.addingTimeInterval(600)))
-        let past = TaskItem(title: "past", schedule: .time(now.addingTimeInterval(-60)))
+        let past = TaskItem(title: "past", schedule: .time(now.addingTimeInterval(-3600)))
         let done = TaskItem(title: "done", schedule: .time(now.addingTimeInterval(300)), completedAt: now)
         let dayOnly = TaskItem(title: "day", schedule: .day(Day(year: 2027, month: 1, day: 15)))
-        let next = try #require(ReminderClock.next(after: now, in: [later, past, done, dayOnly, sooner]))
+        let next = try #require(ReminderClock.next(after: now, in: [later, past, done, dayOnly, sooner], timing: both))
         #expect(next.time == now.addingTimeInterval(600))
-        #expect(next.tasks.map(\.title) == ["sooner"])
+        #expect(next.reminders.map(\.task.title) == ["sooner"])
+        #expect(next.reminders.map(\.moment) == [.start])
     }
 
-    @Test func tasksDueTogetherComeTogether() throws {
-        let time = now.addingTimeInterval(900)
-        let first = TaskItem(title: "a", schedule: .time(time))
-        let second = TaskItem(title: "b", schedule: .time(time))
-        let next = try #require(ReminderClock.next(after: now, in: [first, second]))
-        #expect(next.tasks.map(\.title) == ["a", "b"])
+    @Test func byDefaultTheEndOfTheBlockSpeaksUp() throws {
+        var task = TaskItem(title: "read", schedule: .time(now.addingTimeInterval(600)))
+        task.duration = 45
+        let next = try #require(ReminderClock.next(after: now, in: [task], timing: endOnly))
+        #expect(next.time == now.addingTimeInterval(600 + 45 * 60))
+        #expect(next.reminders.map(\.moment) == [.end])
     }
 
-    @Test func nothingLeftToRemind() {
-        #expect(ReminderClock.next(after: now, in: [TaskItem(title: "inbox")]) == nil)
+    @Test func aRunningTaskStillGetsItsEnd() throws {
+        let running = TaskItem(title: "run", schedule: .time(now.addingTimeInterval(-600)))
+        let next = try #require(ReminderClock.next(after: now, in: [running], timing: both))
+        #expect(next.reminders.map(\.moment) == [.end])
+        #expect(next.time == now.addingTimeInterval(20 * 60))
+    }
+
+    @Test func anEndingTaskLeadsAndPointsAtTheNext() throws {
+        let first = TaskItem(title: "a", schedule: .time(now.addingTimeInterval(600)))
+        let second = TaskItem(title: "b", schedule: .time(now.addingTimeInterval(600 + 30 * 60)))
+        let upcoming = ReminderClock.upcoming(after: now, in: [second, first], timing: both)
+        #expect(upcoming.map { "\($0.task.title)-\($0.moment.rawValue)" } == ["a-start", "a-end", "b-start", "b-end"])
+        let end = upcoming[1]
+        #expect(ReminderClock.following(end, in: [first, second])?.title == "b")
+        #expect(ReminderClock.following(upcoming[0], in: [first, second]) == nil)
+    }
+
+    @Test func nothingWhenRemindersAreOff() {
+        let task = TaskItem(title: "a", schedule: .time(now.addingTimeInterval(600)))
+        #expect(ReminderClock.next(after: now, in: [task], timing: ReminderTiming(atStart: false, atEnd: false)) == nil)
+        #expect(ReminderClock.next(after: now, in: [TaskItem(title: "inbox")], timing: both) == nil)
     }
 }
 
@@ -187,7 +209,8 @@ struct IslandSizeTests {
         #expect(hud.height == notch.height)
         #expect(hud.width - hud.shoulder * 2 == notch.width + IslandModel.bannerWing * 2)
         let task = TaskItem(title: "t", schedule: .time(.now))
-        let reminder = model.layout(for: .banner(.reminder(task, alsoDue: 0)), hovering: false)
+        let due = Reminder(task: task, moment: .end, time: .now)
+        let reminder = model.layout(for: .banner(.reminder(due, next: nil, alsoDue: 0)), hovering: false)
         #expect(reminder.height == notch.height + IslandModel.bannerDrop)
     }
 

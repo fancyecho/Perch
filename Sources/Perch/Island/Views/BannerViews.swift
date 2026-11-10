@@ -30,7 +30,7 @@ struct BannerView: View {
         case .device(let device, let connected): DeviceWings(device: device, connected: connected)
         case .power(let event): PowerWings(event: event)
         case .route(let route): RouteWings(route: route)
-        case .track, .reminder, .alert: EmptyView()
+        case .track, .reminder, .alert, .review: EmptyView()
         }
     }
 
@@ -38,8 +38,9 @@ struct BannerView: View {
     private var dropContent: some View {
         switch banner {
         case .track: TrackBanner()
-        case .reminder(let task, let alsoDue): ReminderBanner(task: task, alsoDue: alsoDue)
+        case .reminder(let reminder, let next, let alsoDue): ReminderBanner(reminder: reminder, next: next, alsoDue: alsoDue)
         case .alert(let alert): AlertBanner(alert: alert)
+        case .review(let count): ReviewBanner(count: count)
         case .level, .device, .power, .route: EmptyView()
         }
     }
@@ -234,20 +235,22 @@ private struct TrackBanner: View {
     }
 }
 
-/// A task falling due: complete it or push it back ten minutes without leaving what you're doing.
+/// A task's block starting or running out, answered without leaving what you're doing: done, or
+/// ten minutes before starting, or fifteen more to finish. The task's own capsule leads, empty as
+/// its time begins and full as it ends, the way the timeline draws it.
 private struct ReminderBanner: View {
-    let task: TaskItem
+    let reminder: Reminder
+    let next: TaskItem?
     let alsoDue: Int
     @Environment(IslandModel.self) private var model
-    @Environment(AppSettings.self) private var settings
-    @State private var ring = false
+    @State private var appeared = false
+
+    private var task: TaskItem { reminder.task }
+    private var isEnd: Bool { reminder.moment == .end }
 
     var body: some View {
         HStack(spacing: 10) {
-            Image(systemName: "bell.fill")
-                .font(.system(size: 17, weight: .semibold))
-                .foregroundStyle(.orange)
-                .symbolEffect(.wiggle, options: .repeat(3), value: ring)
+            capsule
                 .frame(width: 28)
             VStack(alignment: .leading, spacing: 1) {
                 Text(task.title)
@@ -258,17 +261,76 @@ private struct ReminderBanner: View {
             }
             .lineLimit(1)
             Spacer(minLength: 4)
-            ReminderButton(title: tr("稍后", "Later"), isProminent: false) { model.reminderHandler?(task.id, .snooze) }
-                .help(tr("10 分钟后再提醒", "Remind me in 10 minutes"))
+            if isEnd {
+                ReminderButton(title: tr("+15 分钟", "+15 min"), isProminent: false) { model.reminderHandler?(task.id, .extend) }
+                    .help(tr("再给这项 15 分钟", "Give it 15 more minutes"))
+            } else {
+                ReminderButton(title: tr("稍后", "Later"), isProminent: false) { model.reminderHandler?(task.id, .snooze) }
+                    .help(tr("10 分钟后再开始", "Start in 10 minutes"))
+            }
             ReminderButton(title: tr("完成", "Done"), isProminent: true) { model.reminderHandler?(task.id, .complete) }
         }
-        .onAppear { ring.toggle() }
+        .onAppear {
+            withAnimation(.spring(duration: 0.7, bounce: 0.35).delay(0.15)) { appeared = true }
+        }
+    }
+
+    private var capsule: some View {
+        let tint = task.tint.color
+        return ZStack {
+            Capsule(style: .circular).fill(tint.opacity(0.22))
+            Capsule(style: .circular)
+                .fill(LinearGradient(colors: [tint.mix(with: .white, by: 0.14), tint], startPoint: .top, endPoint: .bottom))
+                .scaleEffect(y: isEnd ? 1 : 0.001, anchor: .top)
+            glyph.foregroundStyle(isEnd ? .white : tint)
+        }
+        .frame(width: 20, height: 28)
+        .scaleEffect(appeared ? 1 : 0.6)
+        .opacity(appeared ? 1 : 0)
+    }
+
+    @ViewBuilder
+    private var glyph: some View {
+        switch task.glyph {
+        case .symbol(let name): Image(systemName: name).font(.system(size: 10, weight: .semibold))
+        case .text(let text): Text(text).font(.system(size: 11, weight: .semibold, design: .rounded))
+        }
     }
 
     private var detail: String {
-        let time = task.schedule?.time.map(settings.formatTime) ?? ""
-        let due = tr("\(time) · 到时间了", "\(time) · Due now")
-        return alsoDue > 0 ? due + tr(" · 另有 \(alsoDue) 项", " · \(alsoDue) more") : due
+        let range = DateText.timeRange(task) ?? DateText.time(reminder.time)
+        var parts = [range, isEnd ? tr("时间到了", "Time's up") : tr("开始了", "Starting")]
+        if let next { parts = [tr("时间到了", "Time's up"), tr("接下来「\(next.title)」", "Next: \(next.title)")] }
+        if alsoDue > 0 { parts.append(tr("另有 \(alsoDue) 项", "\(alsoDue) more")) }
+        return parts.joined(separator: " · ")
+    }
+}
+
+/// The evening review: what's still open today, and one button to go through it.
+private struct ReviewBanner: View {
+    let count: Int
+    @Environment(IslandModel.self) private var model
+    @State private var appeared = false
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "moon.stars.fill")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(Color(red: 0.62, green: 0.6, blue: 1))
+                .symbolEffect(.bounce, value: appeared)
+                .frame(width: 28)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(tr("今天还有 \(count) 项没做完", "\(count) left from today"))
+                    .font(.system(size: 13, weight: .semibold))
+                Text(tr("勾掉做完的，其余挪到明天", "Check off what's done, move the rest on"))
+                    .font(.system(size: 11))
+                    .foregroundStyle(.white.opacity(0.55))
+            }
+            .lineLimit(1)
+            Spacer(minLength: 4)
+            ReminderButton(title: tr("整理", "Review"), isProminent: true) { model.reviewHandler?() }
+        }
+        .onAppear { appeared.toggle() }
     }
 }
 

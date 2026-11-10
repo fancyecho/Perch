@@ -10,6 +10,9 @@ struct IslandPreferences: Equatable {
     var battery: Bool
     var taskStyle: TaskStyle
     var reminders: Bool
+    var reminderTiming: ReminderTiming
+    /// Minutes after midnight of the evening review; nil when it's off.
+    var review: Int?
     var haptics: Bool
 
     static var current: IslandPreferences {
@@ -22,6 +25,8 @@ struct IslandPreferences: Equatable {
             battery: defaults.bool(forKey: Pref.islandBattery),
             taskStyle: TaskStyle.current,
             reminders: defaults.bool(forKey: Pref.islandReminders),
+            reminderTiming: .current,
+            review: defaults.bool(forKey: Pref.reviewEnabled) ? defaults.integer(forKey: Pref.reviewTime) : nil,
             haptics: defaults.bool(forKey: Pref.islandHaptics)
         )
     }
@@ -92,6 +97,7 @@ final class IslandController {
     private var lingerTask: Task<Void, Never>?
     private var trustTask: Task<Void, Never>?
     private var alarmTask: Task<Void, Never>?
+    private var reviewTask: Task<Void, Never>?
     private var clockTask: Task<Void, Never>?
     private var peekTask: Task<Void, Never>?
     private var cardFadeTask: Task<Void, Never>?
@@ -159,6 +165,7 @@ final class IslandController {
         }
         model.pageHandler = { [weak self] page in self?.showPage(page) }
         model.alertHandler = { [weak self] alert in self?.handleAlert(alert) }
+        model.reviewHandler = { [weak self] in self?.openReview() }
         volume.onChange = { [weak self] in self?.showLevel(.volume) }
         volume.onRouteChange = { [weak self] route in self?.routeChanged(route) }
         brightness.onChange = { [weak self] in self?.brightnessChanged() }
@@ -580,6 +587,17 @@ final class IslandController {
 
     #if DEBUG
     func debugGlow(_ glow: IslandGlow) { flash(glow) }
+
+    func debugReview() {
+        present(.review(count: max(store.leftoversTonight(now: .now).count, 3)), for: .seconds(12))
+    }
+
+    func debugRemind(start: Bool) {
+        let timing = ReminderTiming(atStart: start, atEnd: !start)
+        guard let reminder = ReminderClock.upcoming(after: .distantPast, in: store.tasks, timing: timing).first else { return }
+        let next = ReminderClock.following(reminder, in: store.tasks)
+        present(.reminder(reminder, next: next, alsoDue: 0), for: .seconds(12))
+    }
     #endif
 
     private func flash(_ glow: IslandGlow) {
@@ -671,8 +689,8 @@ final class IslandController {
         if model.cardMode == .peek, model.peekRows != peekRows {
             withAnimation(PanelController.morph) { model.peekRows = peekRows }
         }
-        if case .reminder(let task, _)? = model.banner,
-           store.task(task.id).map({ $0.isDone || $0.schedule != task.schedule }) ?? true {
+        if case .reminder(let reminder, _, _)? = model.banner,
+           store.task(reminder.task.id).map({ $0.isDone || $0.schedule != reminder.task.schedule || $0.end != reminder.task.end }) ?? true {
             bannerTask?.cancel()
             withAnimation(Self.close) { model.banner = nil }
             refreshPointer()
@@ -681,7 +699,8 @@ final class IslandController {
 
     private func scheduleNextReminder(after date: Date = .now) {
         alarmTask?.cancel()
-        guard preferences.reminders, let next = ReminderClock.next(after: date, in: store.tasks) else { return }
+        guard preferences.reminders,
+              let next = ReminderClock.next(after: date, in: store.tasks, timing: preferences.reminderTiming) else { return }
         alarmTask = Task { [weak self] in
             try? await Task.sleep(for: .seconds(max(next.time.timeIntervalSinceNow, 0)))
             guard let self, !Task.isCancelled else { return }
@@ -690,10 +709,17 @@ final class IslandController {
         }
     }
 
+    /// Several reminders at once share one banner: a task ending leads (pointing at what comes
+    /// next), and the rest are counted.
     private func remind(dueAt time: Date) {
-        let due = store.tasks.filter { !$0.isDone && $0.schedule?.time == time }
-        guard let task = due.first else { return }
-        let banner = IslandBanner.reminder(task, alsoDue: due.count - 1)
+        let tasks = store.tasks
+        let due = ReminderClock.upcoming(after: time.addingTimeInterval(-1), in: tasks, timing: preferences.reminderTiming)
+            .filter { $0.time == time }
+        guard let first = due.first else { return }
+        let next = ReminderClock.following(first, in: tasks)
+        // The task it points to starting at the same moment needn't be counted again.
+        let others = due.dropFirst().filter { !($0.moment == .start && $0.task.id == next?.id) }
+        let banner = IslandBanner.reminder(first, next: next, alsoDue: others.count)
         NSSound(named: "Glass")?.play()
         // A task's title waits for the screen to unlock rather than showing on the lock screen.
         if isOpen || model.isLocked {
@@ -703,6 +729,39 @@ final class IslandController {
         }
     }
 
+    /// Each evening at the review time, if any of today's tasks are still open, a banner offers
+    /// to go through them (the Today list then leads with them).
+    private func scheduleReview() {
+        reviewTask?.cancel()
+        guard preferences.review != nil else { return }
+        let fire = EveningReview.next(after: .now.addingTimeInterval(1))
+        reviewTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(max(fire.timeIntervalSinceNow, 0)))
+            guard let self, !Task.isCancelled else { return }
+            self.offerReview()
+            self.scheduleReview()
+        }
+    }
+
+    private func offerReview(now: Date = .now) {
+        guard EveningReview.isDue(now: now) else { return }
+        let count = store.leftoversTonight(now: now).count
+        guard count > 0 else { return }
+        let banner = IslandBanner.review(count: count)
+        if isOpen || model.isLocked {
+            pendingReminder = banner
+        } else {
+            present(banner, for: .seconds(12))
+        }
+    }
+
+    private func openReview() {
+        bannerTask?.cancel()
+        withAnimation(Self.close) { model.banner = nil }
+        taskPanel.tab = .today
+        openTaskList()
+    }
+
     private func showPendingReminder() {
         guard let pendingReminder, !isOpen else { return }
         self.pendingReminder = nil
@@ -710,12 +769,7 @@ final class IslandController {
     }
 
     private func handleReminder(_ id: UUID, _ action: ReminderAction) {
-        switch action {
-        case .complete:
-            store.complete(id)
-        case .snooze:
-            store.reschedule(id, to: .time(Date.now.addingTimeInterval(10 * 60)))
-        }
+        store.answer(action, for: id)
         bannerTask?.cancel()
         withAnimation(Self.close) { model.banner = nil }
         refreshPointer()
@@ -1178,8 +1232,11 @@ final class IslandController {
         if force || new.levels != old.levels {
             new.levels ? takeOverKeys() : releaseKeys()
         }
-        if force || new.reminders != old.reminders {
+        if force || new.reminders != old.reminders || new.reminderTiming != old.reminderTiming {
             scheduleNextReminder()
+        }
+        if force || new.review != old.review {
+            scheduleReview()
         }
         if force || new.taskStyle != old.taskStyle {
             closeTaskList()

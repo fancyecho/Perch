@@ -9,6 +9,8 @@ struct ParsedInput: Equatable {
     var hasExplicitDate = false
     /// Minutes, from a range ("3-5pm") or a length ("1小时", "45 min").
     var duration: Int?
+    /// "每天", "每周一三五", "weekdays", "every month"…
+    var recurrence: Recurrence?
 }
 
 /// Turns a single line like `明天下午3点 写周报 !! #工作` into a task.
@@ -67,6 +69,8 @@ enum QuickParser {
             if let tag = groups[1], !result.tags.contains(tag) { result.tags.append(tag) }
         }
         result.priority = takePriority(from: &text)
+        // Before the day, so "每周一" isn't read as next Monday.
+        let repeats = takeRecurrence(from: &text)
 
         let today = Day(now, in: cal)
         var dayOffset: Int?
@@ -207,6 +211,26 @@ enum QuickParser {
 
         if result.duration == nil { result.duration = takeDuration(from: &text) }
 
+        if let repeats {
+            // A repeating task starts on its first matching day; "每周" alone repeats on the day it starts.
+            let start = result.schedule ?? .day(defaultDay ?? today)
+            let rule = repeats.days.isEmpty ? repeats.rule ?? .weekly([start.day(in: cal).mondayIndex]) : .weekly(repeats.days)
+            var first = rule.first(onOrAfter: start.day(in: cal))
+            if let time = start.time {
+                let c = cal.dateComponents([.hour, .minute], from: time)
+                var date = first.date(hour: c.hour ?? 9, minute: c.minute ?? 0, in: cal)
+                // Today's time already gone: the first one is the next matching day.
+                if date < now, start.day(in: cal) == today, explicitDay == nil, dayOffset == nil {
+                    first = rule.next(after: today, anchor: today)
+                    date = first.date(hour: c.hour ?? 9, minute: c.minute ?? 0, in: cal)
+                }
+                result.schedule = .time(date)
+            } else {
+                result.schedule = .day(first)
+            }
+            result.recurrence = rule
+        }
+
         result.hasExplicitDate = result.schedule != nil
         if result.schedule == nil, let defaultDay { result.schedule = .day(defaultDay) }
         result.title = cleanTitle(text)
@@ -214,6 +238,35 @@ enum QuickParser {
     }
 
     // MARK: - Pieces
+
+    /// "每天" / "每个工作日" / "每周一三五" / "每周" / "每月", "every day" / "weekdays" /
+    /// "every mon and thu" / "weekly" / "monthly". `days` is set for weekly on named days; a
+    /// plain "every week" has neither, and repeats on whatever day the task lands.
+    private static func takeRecurrence(from text: inout String) -> (rule: Recurrence?, days: Set<Int>)? {
+        if take(#"(每天|每日|天天)"#, from: &text) != nil || take(#"\b(every\s*day|daily)\b"#, from: &text) != nil {
+            return (.daily, [])
+        }
+        if take(#"(每个?工作日|(?<=\s)工作日(?=\s))"#, from: &text) != nil || take(#"\b(every\s+weekday|weekdays)\b"#, from: &text) != nil {
+            return (.weekdays, [])
+        }
+        if let g = take(#"每个?(?:周|星期|礼拜)([一二三四五六日天1-7](?:[、,，和及\s]*[一二三四五六日天1-7])*)"#, from: &text) {
+            let days = Set((g[1] ?? "").compactMap { weekdayIndex(String($0)) })
+            if !days.isEmpty { return (nil, days) }
+        }
+        let names = #"(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday|mon|tues|tue|wed|thurs|thur|thu|fri|sat|sun)"#
+        if let g = take("\\bevery\\s+(\(names)(?:\\s*(?:,|and|&)\\s*\(names))*)\\b", from: &text) {
+            let words = (g[1] ?? "").lowercased().split { !$0.isLetter }.map(String.init)
+            let days = Set(words.compactMap { weekdayIndex($0) })
+            if !days.isEmpty { return (nil, days) }
+        }
+        if take(#"(每个?(?:周|星期|礼拜))"#, from: &text) != nil || take(#"\b(every\s+week|weekly)\b"#, from: &text) != nil {
+            return (nil, [])
+        }
+        if take(#"(每个?月)"#, from: &text) != nil || take(#"\b(every\s+month|monthly)\b"#, from: &text) != nil {
+            return (.monthly, [])
+        }
+        return nil
+    }
 
     /// The minute part after 点: 半 / 一刻 / 三刻 / digits, in four groups starting at `index`.
     private static func minutes(_ g: Groups, from index: Int) -> Int {

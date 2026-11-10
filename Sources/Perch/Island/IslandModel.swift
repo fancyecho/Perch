@@ -56,10 +56,6 @@ enum StatusMetric: Equatable {
     case cpu, memory, temperature, network
 }
 
-enum ReminderAction {
-    case complete, snooze
-}
-
 enum LevelKind: Equatable {
     case volume, brightness, keyboard
 }
@@ -80,11 +76,13 @@ enum IslandBanner: Equatable {
     case power(PowerEvent)
     case route(AudioRoute)
     case track
-    case reminder(TaskItem, alsoDue: Int)
+    case reminder(Reminder, next: TaskItem?, alsoDue: Int)
     case alert(SystemAlert)
+    /// The evening review: how many of today's tasks are still open.
+    case review(count: Int)
 
     enum Kind: Equatable {
-        case level, device, power, route, track, reminder, alert
+        case level, device, power, route, track, reminder, alert, review
     }
 
     /// Banners of the same kind update in place instead of closing and reopening.
@@ -97,6 +95,7 @@ enum IslandBanner: Equatable {
         case .track: .track
         case .reminder: .reminder
         case .alert: .alert
+        case .review: .review
         }
     }
 
@@ -104,7 +103,7 @@ enum IslandBanner: Equatable {
     var passesCurtain: Bool {
         switch kind {
         case .level, .reminder: true
-        case .device, .power, .route, .track, .alert: false
+        case .device, .power, .route, .track, .alert, .review: false
         }
     }
 
@@ -112,7 +111,7 @@ enum IslandBanner: Equatable {
     /// to say drop down below it.
     var dropsDown: Bool {
         switch kind {
-        case .track, .reminder, .alert: true
+        case .track, .reminder, .alert, .review: true
         case .level, .device, .power, .route: false
         }
     }
@@ -271,6 +270,7 @@ final class IslandModel {
     @ObservationIgnored var pageHandler: ((IslandPage) -> Void)?
     /// The action on an alert banner: quit the runaway process, or look at the status.
     @ObservationIgnored var alertHandler: ((SystemAlert) -> Void)?
+    @ObservationIgnored var reviewHandler: (() -> Void)?
 
     init(geometry: NotchGeometry) {
         self.geometry = geometry
@@ -357,17 +357,5 @@ final class IslandModel {
 
     func expand() {
         expandHandler?()
-    }
-}
-
-/// When the next timed task falls due, and which tasks fall due at that moment.
-nonisolated enum ReminderClock {
-    static func next(after now: Date, in tasks: [TaskItem]) -> (time: Date, tasks: [TaskItem])? {
-        let upcoming = tasks.compactMap { task -> (task: TaskItem, time: Date)? in
-            guard !task.isDone, let time = task.schedule?.time, time > now else { return nil }
-            return (task, time)
-        }
-        guard let first = upcoming.map(\.time).min() else { return nil }
-        return (first, upcoming.filter { $0.time == first }.map(\.task))
     }
 }
