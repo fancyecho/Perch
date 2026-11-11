@@ -166,7 +166,7 @@ final class TimelineLayout {
                 spans[entry.id] = .now(now)
             case .edge(_, let time, _):
                 spans[entry.id] = .point(time)
-            case .gap, .overlap, .anytime:
+            case .gap, .overlap, .anytime, .details:
                 break
             }
         }
@@ -363,6 +363,7 @@ struct TodayTimeline: View {
     @State private var lifted: TimelineLift?
     /// The rows' times by height, and where times are written, for the day's part names.
     @State private var sky = Sky()
+    @Environment(PanelModel.self) private var model: PanelModel?
 
     private struct Sky: Equatable {
         var marks: [TimelineRuler.Mark] = []
@@ -387,7 +388,7 @@ struct TodayTimeline: View {
 
     var body: some View {
         let _ = (defaultColor, topicColors)
-        let entries = Self.entries(for: tasks, now: now, day: TimelineDay(start: dayStart, end: dayEnd))
+        let entries = Self.entries(for: tasks, now: now, day: TimelineDay(start: dayStart, end: dayEnd), expanded: model?.expandedTaskID)
         let _ = layout.update(entries, now: now)
         VStack(alignment: .leading, spacing: 1) {
             rows(entries)
@@ -431,6 +432,11 @@ struct TodayTimeline: View {
             case .anytime(let node):
                 AnytimeMarker(node: node)
                     .opacity(fadesBack(entry) ? 0.3 : 1)
+            case .details(let task, let node):
+                // Picked up, the task leaves its details behind, out of sight.
+                TimelineDetailsRow(task: task, node: node)
+                    .opacity(isLifted(task) && lift?.isSettling == false ? 0 : fadesBack(entry) ? 0.3 : 1)
+                    .transition(.opacity.combined(with: .offset(y: -4)))
             case .edge(let edge, let time, let node):
                 DayEdgeMarker(edge: edge, time: time, node: node)
                     .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(TimelineLayout.space)) } action: { measured(entry.id, $0) }
@@ -458,6 +464,8 @@ struct TodayTimeline: View {
             case overlap(Overlap, TimelineNode)
             case anytime(TimelineNode)
             case edge(TimelineEdge, Date, TimelineNode)
+            /// An opened task's checklist and notes, under it on the line.
+            case details(TaskItem, TimelineNode)
         }
 
         let id: String
@@ -467,7 +475,7 @@ struct TodayTimeline: View {
             get {
                 switch kind {
                 case .task(_, let node), .now(let node), .gap(_, _, let node), .overlap(_, let node), .anytime(let node),
-                     .edge(_, _, let node): node
+                     .edge(_, _, let node), .details(_, let node): node
                 }
             }
             set {
@@ -478,6 +486,7 @@ struct TodayTimeline: View {
                 case .overlap(let overlap, _): kind = .overlap(overlap, newValue)
                 case .anytime: kind = .anytime(newValue)
                 case .edge(let edge, let time, _): kind = .edge(edge, time, newValue)
+                case .details(let task, _): kind = .details(task, newValue)
                 }
             }
         }
@@ -490,6 +499,7 @@ struct TodayTimeline: View {
         case overlap(Overlap)
         case anytime
         case edge(TimelineEdge, Date)
+        case details(TaskItem)
 
         /// Where the item starts and ends in time; nil for untimed items.
         var span: (start: Date, end: Date)? {
@@ -498,13 +508,15 @@ struct TodayTimeline: View {
             case .now: nil
             case .gap(let from, let to): (from, to)
             case .edge(_, let time): (time, time)
+            // Held at the task's end, like free time starting there.
+            case .details(let task): task.end.map { ($0, $0) }
             case .overlap, .anytime: nil
             }
         }
 
         var isUntimed: Bool {
             switch self {
-            case .task(let task): !task.hasTime
+            case .task(let task), .details(let task): !task.hasTime
             case .anytime: true
             case .now, .gap, .overlap, .edge: false
             }
@@ -527,7 +539,7 @@ struct TodayTimeline: View {
         return close > open ? (open, close) : nil
     }
 
-    static func entries(for tasks: [TaskItem], now: Date, day: TimelineDay? = nil) -> [Entry] {
+    static func entries(for tasks: [TaskItem], now: Date, day: TimelineDay? = nil, expanded: UUID? = nil) -> [Entry] {
         let timed = tasks.filter(\.hasTime).sorted {
             ($0.schedule?.time ?? now, $0.end ?? now) < ($1.schedule?.time ?? now, $1.end ?? now)
         }
@@ -584,6 +596,7 @@ struct TodayTimeline: View {
                 noteFreeTime(until: start)
             }
             items.append(.task(task))
+            if task.id == expanded { items.append(.details(task)) }
             nowJustPlaced = false
             if end > (lastEnd ?? .distantPast) {
                 lastEnd = end
@@ -594,14 +607,14 @@ struct TodayTimeline: View {
         if !placedNow { items.append(.now) }
         if !untimed.isEmpty {
             if !timed.isEmpty { items.append(.anytime) }
-            items += untimed.map(Item.task)
+            items += untimed.flatMap { task in task.id == expanded ? [Item.task(task), .details(task)] : [.task(task)] }
         }
 
         // Colors along the line: each task's own; markers borrow from their neighbours.
         let accent = Color.accentColor
         let ownColors: [Color?] = items.map { item in
             switch item {
-            case .task(let task): task.tint.color
+            case .task(let task), .details(let task): task.tint.color
             case .now: accent
             case .gap, .overlap, .anytime, .edge: nil
             }
@@ -651,6 +664,9 @@ struct TodayTimeline: View {
             case .anytime:
                 node.height = 8
                 return Entry(id: "anytime", kind: .anytime(node))
+            case .details(let task):
+                node.height = 0
+                return Entry(id: "details-\(task.id)", kind: .details(task, node))
             case .edge(let edge, let time):
                 node.height = DayEdgeMarker.dot
                 node.start = time
@@ -1210,6 +1226,22 @@ private struct OverlapMarker: View {
         .frame(height: 28)
         .background { TimelineTrack(node: node) }
         .accessibilityElement(children: .contain)
+    }
+}
+
+/// An opened task's checklist and notes, lined up under its title with the line running on
+/// beside them.
+private struct TimelineDetailsRow: View {
+    let task: TaskItem
+    let node: TimelineNode
+
+    var body: some View {
+        TaskDetails(task: task, tint: task.priority == .none ? task.tint.color : task.priority.tint)
+            .padding(.leading, TimelineMetrics.textX - 4)
+            .padding(.trailing, 8)
+            .padding(.bottom, 2)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background { TimelineTrack(node: node) }
     }
 }
 

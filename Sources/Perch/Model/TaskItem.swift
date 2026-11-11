@@ -202,6 +202,10 @@ nonisolated struct TaskItem: Identifiable, Hashable, Sendable {
     var color: TaskColor?
     /// Comes back on a schedule once done or skipped.
     var recurrence: Recurrence?
+    /// Free-form details. Nil (never empty) when there are none.
+    var notes: String?
+    /// A checklist of smaller steps.
+    var subtasks: [Subtask] = []
 
     static let defaultDuration = 30
     static let durationRange = 5...(24 * 60)
@@ -213,11 +217,51 @@ nonisolated struct TaskItem: Identifiable, Hashable, Sendable {
     var end: Date? { schedule?.time.map { $0.addingTimeInterval(Double(minutes) * 60) } }
 
     func day(in calendar: Calendar) -> Day? { schedule?.day(in: calendar) }
+
+    var hasNotes: Bool { notes.map { !$0.isEmpty } ?? false }
+    /// Has a checklist or notes to show when the task is opened up.
+    var hasDetails: Bool { !subtasks.isEmpty || hasNotes }
+    /// Checked-off steps and all steps, counting only ones with a title.
+    var checklist: (done: Int, total: Int) {
+        let named = subtasks.filter { !$0.title.isEmpty }
+        return (named.filter(\.isDone).count, named.count)
+    }
+}
+
+/// One step of a task's checklist.
+nonisolated struct Subtask: Identifiable, Hashable, Sendable, Codable {
+    var id = UUID()
+    var title: String
+    var isDone = false
+
+    private enum CodingKeys: String, CodingKey {
+        case id, title, done
+    }
+
+    init(id: UUID = UUID(), title: String, isDone: Bool = false) {
+        self.id = id
+        self.title = title
+        self.isDone = isDone
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        title = try c.decodeIfPresent(String.self, forKey: .title) ?? ""
+        isDone = try c.decodeIfPresent(Bool.self, forKey: .done) ?? false
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(title, forKey: .title)
+        if isDone { try c.encode(true, forKey: .done) }
+    }
 }
 
 extension TaskItem: Codable {
     private enum CodingKeys: String, CodingKey {
-        case id, title, day, at, priority, tags, createdAt, completedAt, duration, color, repeats
+        case id, title, day, at, priority, tags, createdAt, completedAt, duration, color, repeats, notes, subtasks
         // Format used before floating days existed.
         case due, hasTime
     }
@@ -233,6 +277,9 @@ extension TaskItem: Codable {
         duration = try c.decodeIfPresent(Int.self, forKey: .duration)
         color = try? c.decodeIfPresent(TaskColor.self, forKey: .color)
         recurrence = (try? c.decodeIfPresent(String.self, forKey: .repeats)).flatMap { $0.flatMap(Recurrence.init(storageValue:)) }
+        notes = (try? c.decodeIfPresent(String.self, forKey: .notes)).flatMap { $0 }.flatMap { $0.isEmpty ? nil : $0 }
+        // A step left blank when the app quit mid-edit isn't worth keeping.
+        subtasks = ((try? c.decodeIfPresent([Subtask].self, forKey: .subtasks)) ?? nil ?? []).filter { !$0.title.isEmpty }
 
         if let at = try c.decodeIfPresent(Date.self, forKey: .at) {
             schedule = .time(at)
@@ -261,6 +308,9 @@ extension TaskItem: Codable {
         try c.encodeIfPresent(duration, forKey: .duration)
         try c.encodeIfPresent(color, forKey: .color)
         try c.encodeIfPresent(recurrence?.storageValue, forKey: .repeats)
+        // Left out when empty, so files of tasks without details read as they always have.
+        if let notes, !notes.isEmpty { try c.encode(notes, forKey: .notes) }
+        if !subtasks.isEmpty { try c.encode(subtasks, forKey: .subtasks) }
     }
 }
 

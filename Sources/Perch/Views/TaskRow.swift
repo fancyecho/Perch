@@ -33,6 +33,7 @@ struct TaskRow: View {
     @State private var pointerTravel: CGFloat = 0
     @State private var scrollAtStart: CGFloat = 0
     @Environment(TimelineScroller.self) private var scroller: TimelineScroller?
+    @Environment(PanelModel.self) private var model: PanelModel?
     @State private var hoveringCapsule = false
     @AppStorage(Pref.taskDefaultColor) private var defaultColor = TaskColor.coral.rawValue
     @AppStorage(Pref.taskTopicColors) private var topicColors = true
@@ -45,12 +46,39 @@ struct TaskRow: View {
     private var timeDrag: TimelineDrag? { liveDrag }
     #endif
     private var isMoving: Bool { timeDrag?.mode == .move }
+    #if DEBUG
+    /// Lets a snapshot show a row as it is under the pointer.
+    static var debugHover: UUID?
+    private var isHovered: Bool { hovering || Self.debugHover == task.id }
+    #else
+    private var isHovered: Bool { hovering }
+    #endif
 
     private var offset: CGFloat { (swipe.rowID == task.id ? swipe.offset : 0) + dragOffset }
     private var isChecked: Bool { task.isDone || completing }
     private var isFocusTask: Bool { store.focus?.taskID == task.id }
 
+    private var isExpanded: Bool { model?.isExpanded(task.id) ?? false }
+
     var body: some View {
+        // On the timeline the details are a row of their own (see TodayTimeline), so the line
+        // runs on past them; in a list they open up under the row.
+        VStack(alignment: .leading, spacing: 0) {
+            row
+            if timeline == nil, style == .regular, isExpanded {
+                TaskDetails(task: task, tint: task.priority.tint)
+                    .padding(.leading, Self.listTextX - 4)
+                    .padding(.trailing, 8)
+                    .padding(.bottom, 2)
+                    .transition(.opacity.combined(with: .offset(y: -4)))
+            }
+        }
+    }
+
+    /// Where a list row's title starts: padding, the checkbox and its touch margin, spacing.
+    private static let listTextX: CGFloat = 8 + 18 + 8 + 8
+
+    private var row: some View {
         // On the timeline only the text card slides (see timelineContent), so the capsule never
         // leaves the line.
         ZStack(alignment: offset >= 0 ? .leading : .trailing) {
@@ -154,7 +182,9 @@ struct TaskRow: View {
             // The text picks the task up too; a sideways drag is still a swipe.
             .simultaneousGesture(retimeGesture(.move, minimumDistance: 6), including: canRetime(node) ? .all : .subviews)
         }
-        .padding(.vertical, node.isCollapsed ? 3 : 7)
+        .padding(.top, node.isCollapsed ? 3 : 7)
+        // Opened, its details follow straight on in the next row.
+        .padding(.bottom, node.isCollapsed ? 3 : isExpanded ? 2 : 7)
         .padding(.horizontal, 8)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background {
@@ -315,10 +345,7 @@ struct TaskRow: View {
 
             Spacer(minLength: 4)
 
-            let showsButton = (hovering && !isChecked && !isEditing) || editingSchedule
-            rescheduleButton
-                .opacity(showsButton ? 1 : 0)
-                .allowsHitTesting(showsButton)
+            hoverActions
                 .frame(width: node.isCollapsed ? 0 : nil)
             CheckCircle(isOn: isChecked, tint: checkTint, size: node.isCollapsed ? 16 : 20, action: toggle)
                 .frame(width: 20)
@@ -342,6 +369,9 @@ struct TaskRow: View {
                     .foregroundStyle(.tertiary)
                     .lineLimit(1)
             }
+            detailsHint
+                .font(.system(size: 10.5))
+                .opacity(isExpanded ? 1 : 0.7)
         }
         .transition(.opacity)
     }
@@ -381,9 +411,22 @@ struct TaskRow: View {
         task.priority == .none ? task.tint.color : task.priority.tint
     }
 
+    /// "☑ 2/5" and a notes glyph, when the task has either.
+    @ViewBuilder
+    private var detailsHint: some View {
+        if task.hasDetails {
+            DetailsHint(task: task, tint: timeline == nil ? task.priority.tint : checkTint, isOpen: isExpanded) {
+                withAnimation(.snappy) { model?.toggleDetails(task.id) }
+            }
+        }
+    }
+
+    /// Under the title: repeat, focus, the details hint and tags (the time line above has no room
+    /// to spare for a hint while it counts down).
     @ViewBuilder
     private var tagLine: some View {
-        if !task.tags.isEmpty || isFocusTask || (task.recurrence != nil && !task.hasTime) {
+        let hint = task.hasDetails
+        if !task.tags.isEmpty || isFocusTask || (task.recurrence != nil && !task.hasTime) || hint {
             HStack(spacing: 8) {
                 if let recurrence = task.recurrence, !task.hasTime {
                     Label(recurrence.title, systemImage: "repeat")
@@ -393,6 +436,7 @@ struct TaskRow: View {
                     Label(tr("专注中", "Focusing"), systemImage: "scope")
                         .foregroundStyle(Color.accentColor)
                 }
+                if hint { detailsHint }
                 ForEach(task.tags, id: \.self) { tag in
                     Text("#\(tag)").foregroundStyle(task.tint.color)
                 }
@@ -444,10 +488,7 @@ struct TaskRow: View {
                 }
             } else {
                 // A fixed slot, so the title never re-wraps when the button fades in.
-                let showsButton = (hovering && !isChecked && !isEditing) || editingSchedule
-                rescheduleButton
-                    .opacity(showsButton ? 1 : 0)
-                    .allowsHitTesting(showsButton)
+                hoverActions
             }
         }
         .padding(.vertical, style == .compact ? 4 : 6)
@@ -463,7 +504,7 @@ struct TaskRow: View {
     @ViewBuilder
     private var metadata: some View {
         let dueLabel = DateText.dueLabel(task, now: now)
-        if dueLabel != nil || !task.tags.isEmpty || isFocusTask || task.recurrence != nil {
+        if dueLabel != nil || !task.tags.isEmpty || isFocusTask || task.recurrence != nil || task.hasDetails {
             HStack(spacing: 8) {
                 if isFocusTask {
                     Label(tr("专注中", "Focusing"), systemImage: "scope")
@@ -484,6 +525,7 @@ struct TaskRow: View {
                     Label(recurrence.title, systemImage: "repeat")
                         .foregroundStyle(.secondary)
                 }
+                detailsHint
                 ForEach(task.tags, id: \.self) { tag in
                     Text("#\(tag)").foregroundStyle(Color.accentColor.opacity(0.9))
                 }
@@ -492,6 +534,46 @@ struct TaskRow: View {
             .labelStyle(CompactLabelStyle())
             .lineLimit(1)
         }
+    }
+
+    /// The buttons that fade in on hover, each in a fixed slot so the title never re-wraps:
+    /// steps and notes, then date and time.
+    private var hoverActions: some View {
+        let showsButtons = isHovered && !isChecked && !isEditing
+        let showsDetails = showsButtons && model != nil
+        let showsSchedule = showsButtons || editingSchedule
+        return HStack(spacing: 0) {
+            detailsButton
+                .opacity(showsDetails ? 1 : 0)
+                .allowsHitTesting(showsDetails)
+            rescheduleButton
+                .opacity(showsSchedule ? 1 : 0)
+                .allowsHitTesting(showsSchedule)
+        }
+    }
+
+    /// Opens the task to add steps or notes (straight into a new step when it has none yet),
+    /// or folds it away again.
+    private var detailsButton: some View {
+        Button {
+            withAnimation(.snappy) {
+                if task.hasDetails || isExpanded {
+                    model?.toggleDetails(task.id)
+                } else {
+                    model?.editDetails(task.id, .newSubtask)
+                }
+            }
+        } label: {
+            Image(systemName: "checklist")
+                .font(.system(size: 12, weight: .semibold))
+                .frame(width: 22, height: 22)
+                .background(Circle().fill(Color.primary.opacity(isExpanded ? 0.1 : 0)))
+                .contentShape(.circle)
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(isExpanded ? Color.accentColor : .secondary)
+        .help(isExpanded ? tr("收起子任务和备注", "Hide steps and notes")
+            : task.hasDetails ? tr("显示子任务和备注", "Show steps and notes") : tr("添加子任务或备注", "Add steps or notes"))
     }
 
     private var rescheduleButton: some View {
@@ -613,6 +695,7 @@ struct TaskMenu: View {
     let onEdit: () -> Void
     let onSchedule: () -> Void
     @Environment(TaskStore.self) private var store
+    @Environment(PanelModel.self) private var model: PanelModel?
 
     var body: some View {
         if task.isDone {
@@ -626,6 +709,12 @@ struct TaskMenu: View {
             }
             Button(tr("编辑标题", "Edit Title"), action: onEdit)
             Button(tr("修改日期和时间…", "Change Date & Time…"), action: onSchedule)
+            if let model {
+                Button(tr("添加子任务", "Add Step")) { withAnimation(.snappy) { model.editDetails(task.id, .newSubtask) } }
+                Button(task.hasNotes ? tr("编辑备注", "Edit Notes") : tr("添加备注", "Add Notes")) {
+                    withAnimation(.snappy) { model.editDetails(task.id, .notes) }
+                }
+            }
             Divider()
             Menu(tr("日期", "Date")) { ScheduleMenuItems(task: task) }
             if task.hasTime {
@@ -676,6 +765,11 @@ struct TaskMenu: View {
                         set: { _ in store.setPriority(task.id, priority) }
                     ))
                 }
+            }
+        }
+        if let model, task.isDone, task.hasDetails {
+            Button(model.isExpanded(task.id) ? tr("收起子任务和备注", "Hide Steps and Notes") : tr("显示子任务和备注", "Show Steps and Notes")) {
+                withAnimation(.snappy) { model.toggleDetails(task.id) }
             }
         }
         Divider()

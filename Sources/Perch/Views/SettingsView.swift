@@ -446,9 +446,12 @@ private struct HelpPane: View {
                 ReferenceRow(example: tr("触控板向右扫 / 鼠标向右拖", "Swipe or drag right"), meaning: tr("完成", "Complete"))
                 ReferenceRow(example: tr("触控板向左扫 / 鼠标向左拖", "Swipe or drag left"), meaning: tr("推迟到明天", "Move to tomorrow"))
                 ReferenceRow(example: tr("双击任务文字", "Double-click a title"), meaning: tr("编辑", "Edit"))
+                ReferenceRow(example: tr("悬停任务点清单按钮 · 右键 › 添加子任务 · 点「☑ 2/5」", "Hover a task, click the checklist button · Right-click › Add Step · click “☑ 2/5”"), meaning: tr("子任务和备注", "Steps and notes"))
+                ReferenceRow(example: tr("在子任务里按 ↩ · 在空的子任务里按 ⌫", "↩ in a step · ⌫ in an empty step"), meaning: tr("加下一项 · 删掉这一项", "Add the next · remove it"))
                 ReferenceRow(example: tr("在时间轴上按住任务上下拖 / 拖胶囊下边缘", "Drag a task along the timeline / a capsule's bottom edge"), meaning: tr("改时间 / 改时长", "Move / change length"))
                 ReferenceRow(example: tr("点时间轴上的空闲时段", "Click free time on the timeline"), meaning: tr("在那个时间加一项", "Add a task then"))
                 ReferenceRow(example: "⌘1 – ⌘5 · ⌘N · Esc", meaning: tr("切换分组（⌘5 专注）· 新任务 · 收起", "Switch list (⌘5 Focus) · New task · Collapse"))
+                ReferenceRow(example: "⌘Z · ⇧⌘Z", meaning: tr("撤销 · 重做", "Undo · Redo"))
             }
 
             Section(tr("灵动岛", "Island")) {

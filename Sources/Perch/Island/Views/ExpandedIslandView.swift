@@ -807,10 +807,25 @@ private struct IslandTaskRow: View {
                     .strikethrough(completing, color: .white.opacity(0.5))
                     .foregroundStyle(completing ? .white.opacity(0.5) : .white)
                     .lineLimit(1)
-                if let label = DateText.dueLabel(task, now: now) {
-                    Text(label)
-                        .font(.system(size: 10.5).monospacedDigit())
-                        .foregroundStyle(DateText.isOverdue(task, now: now) ? Color.red.opacity(0.9) : .white.opacity(0.5))
+                let label = DateText.dueLabel(task, now: now)
+                let checklist = task.checklist
+                if label != nil || checklist.total > 0 {
+                    HStack(spacing: 6) {
+                        if let label {
+                            Text(label)
+                                .foregroundStyle(DateText.isOverdue(task, now: now) ? Color.red.opacity(0.9) : .white.opacity(0.5))
+                        }
+                        // Just how far along its checklist is.
+                        if checklist.total > 0 {
+                            HStack(spacing: 2) {
+                                Image(systemName: checklist.done == checklist.total ? "checklist.checked" : "checklist")
+                                    .imageScale(.small)
+                                Text("\(checklist.done)/\(checklist.total)")
+                            }
+                            .foregroundStyle(.white.opacity(0.4))
+                        }
+                    }
+                    .font(.system(size: 10.5).monospacedDigit())
                 }
             }
             .padding(.top, 1)

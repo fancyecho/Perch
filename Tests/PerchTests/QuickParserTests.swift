@@ -302,6 +302,7 @@ struct TimelineTests {
             case .overlap(let overlap, _): "overlap\(overlap.minutes)"
             case .anytime(let node): "anytime:\(node.above.style)/\(node.below.style)"
             case .edge(let edge, _, _): "\(edge)"
+            case .details(let task, _): "details:\(task.title)"
             }
         }
     }
@@ -727,6 +728,7 @@ struct TimelineDayTests {
             case .overlap: "overlap"
             case .anytime: "anytime"
             case .edge(let edge, _, _): "\(edge)"
+            case .details: "details"
             }
         }
     }

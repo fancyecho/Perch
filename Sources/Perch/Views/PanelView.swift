@@ -621,9 +621,15 @@ private struct NoticeToast: View {
 
 private struct KeyboardShortcuts: View {
     @Environment(PanelModel.self) private var model
+    @Environment(TaskStore.self) private var store
 
     var body: some View {
         ZStack {
+            // While text is being edited the panel hands ⌘Z to the text instead (FloatingPanel).
+            Button("") { withAnimation(.snappy) { store.undo(announcing: true) } }
+                .keyboardShortcut("z", modifiers: .command)
+            Button("") { withAnimation(.snappy) { store.redo(announcing: true) } }
+                .keyboardShortcut("z", modifiers: [.command, .shift])
             ForEach(TaskTab.allCases) { tab in
                 Button("") { withAnimation(.snappy(duration: 0.28)) { model.tab = tab } }
                     .keyboardShortcut(KeyEquivalent(Character("\(tab.rawValue + 1)")), modifiers: .command)

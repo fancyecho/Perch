@@ -22,6 +22,16 @@ enum TaskTab: Int, CaseIterable, Identifiable {
     }
 }
 
+/// A request to put the caret in an opened task's checklist or notes.
+struct DetailFocus: Equatable {
+    enum Field: Equatable { case newSubtask, notes }
+
+    var taskID: UUID
+    var field: Field
+    /// Asking twice for the same field still moves the caret.
+    var token = UUID()
+}
+
 /// View-facing state of the floating card. Rects are in the window's SwiftUI (top-left) space.
 @Observable
 final class PanelModel {
@@ -36,6 +46,10 @@ final class PanelModel {
     /// Text to put in the quick-add field (and focus it), e.g. a free slot's time.
     var prefill: String?
     var tab: TaskTab = .today
+    /// The task opened up to show its checklist and notes (one at a time).
+    var expandedTaskID: UUID?
+    /// Where to put the caret once that task's details are on screen.
+    var detailFocus: DetailFocus?
     /// The panel is shown inside the notch island rather than the floating window.
     @ObservationIgnored var isInIsland = false
 
@@ -52,6 +66,20 @@ final class PanelModel {
     }
 
     var growsUpward: Bool { anchor == .bottomLeading || anchor == .bottomTrailing }
+
+    func isExpanded(_ id: UUID) -> Bool { expandedTaskID == id }
+
+    /// Opens a task's details, or closes them if they are open and nothing asks for the caret.
+    func toggleDetails(_ id: UUID) {
+        expandedTaskID = expandedTaskID == id ? nil : id
+        detailFocus = nil
+    }
+
+    /// Opens a task's details with the caret in its checklist or its notes.
+    func editDetails(_ id: UUID, _ field: DetailFocus.Field) {
+        expandedTaskID = id
+        detailFocus = DetailFocus(taskID: id, field: field)
+    }
 
     func go(_ mode: PanelMode, focusInput: Bool = false) {
         router?(mode, focusInput)

@@ -29,6 +29,16 @@ final class TaskStore {
     @ObservationIgnored private var saveTask: Task<Void, Never>?
     @ObservationIgnored private let fileURL: URL
 
+    /// Every change can be stepped back with ⌘Z (and forward again with ⇧⌘Z). Each entry is the
+    /// state before one action; changes made in the same turn of the run loop (a drag let go, a
+    /// step renamed and the next one opened) count as one.
+    @ObservationIgnored private var undoStack: [Notice.Snapshot] = []
+    @ObservationIgnored private var redoStack: [Notice.Snapshot] = []
+    /// The state as of the last change, which becomes the undo entry for the next one.
+    @ObservationIgnored private var committed = Notice.Snapshot(tasks: [], focus: nil)
+    @ObservationIgnored private var groupOpen = false
+    static let historyLimit = 50
+
     init(fileURL: URL = TaskStore.defaultFileURL) {
         self.fileURL = fileURL
         if let data = try? Data(contentsOf: fileURL),
@@ -38,6 +48,7 @@ final class TaskStore {
         } else {
             tasks = Self.welcomeTasks()
         }
+        committed = Self.meaningful(currentSnapshot)
     }
 
     static var defaultFileURL: URL {
@@ -98,7 +109,10 @@ final class TaskStore {
     func skip(_ id: UUID) {
         guard let task = task(id), let next = nextOccurrence(of: task) else { return }
         let snapshot = currentSnapshot
-        update(id) { $0.schedule = next.schedule }
+        update(id) { item in
+            item.schedule = next.schedule
+            item.subtasks = item.subtasks.map { Subtask(id: $0.id, title: $0.title) }
+        }
         let when = DateText.dueLabel(next, now: .now) ?? ""
         announce(tr("跳过这次，下次 \(when)", "Skipped · next \(when)"), undo: snapshot)
         changed()
@@ -129,6 +143,9 @@ final class TaskStore {
         var copy = TaskItem(title: task.title, schedule: Self.moving(task.schedule, to: next, in: calendar), priority: task.priority,
                             tags: task.tags, duration: task.duration, color: task.color, recurrence: recurrence)
         copy.createdAt = now
+        // The same notes and steps come back, all unchecked, for the next time round.
+        copy.notes = task.notes
+        copy.subtasks = task.subtasks.filter { !$0.title.isEmpty }.map { Subtask(title: $0.title) }
         return copy
     }
 
@@ -205,7 +222,10 @@ final class TaskStore {
         for id in ids {
             guard let task = task(id) else { continue }
             if let next = nextOccurrence(of: task) {
-                update(id) { $0.schedule = next.schedule }
+                update(id) { item in
+                    item.schedule = next.schedule
+                    item.subtasks = item.subtasks.map { Subtask(id: $0.id, title: $0.title) }
+                }
             } else {
                 schedule(id, day: day)
             }
@@ -278,6 +298,86 @@ final class TaskStore {
         changed()
     }
 
+    // MARK: Details
+
+    /// Adds a step to a task's checklist, after `after` or at the end. A blank title makes an
+    /// empty row to type into, as Return in the checklist does; `removeBlankSubtasks` tidies
+    /// it away if nothing gets written.
+    @discardableResult
+    func addSubtask(_ id: UUID, title: String = "", after: UUID? = nil) -> Subtask? {
+        guard task(id) != nil else { return nil }
+        let subtask = Subtask(title: title.trimmingCharacters(in: .whitespacesAndNewlines))
+        update(id) { item in
+            if let after, let index = item.subtasks.firstIndex(where: { $0.id == after }) {
+                item.subtasks.insert(subtask, at: index + 1)
+            } else {
+                item.subtasks.append(subtask)
+            }
+        }
+        changed()
+        return subtask
+    }
+
+    /// Renames a step. A blank title is kept only while the row is being written.
+    func renameSubtask(_ id: UUID, _ subtaskID: UUID, to title: String) {
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let current = task(id)?.subtasks.first(where: { $0.id == subtaskID }), current.title != trimmed else { return }
+        updateSubtask(id, subtaskID) { $0.title = trimmed }
+        changed()
+    }
+
+    func toggleSubtask(_ id: UUID, _ subtaskID: UUID) {
+        updateSubtask(id, subtaskID) { $0.isDone.toggle() }
+        changed()
+    }
+
+    /// Removes a step. One with a title can be brought back from the notice.
+    func deleteSubtask(_ id: UUID, _ subtaskID: UUID) {
+        guard let subtask = task(id)?.subtasks.first(where: { $0.id == subtaskID }) else { return }
+        let snapshot = currentSnapshot
+        update(id) { $0.subtasks.removeAll { $0.id == subtaskID } }
+        if !subtask.title.isEmpty {
+            announce(tr("已删除子任务「\(subtask.title)」", "Deleted step “\(subtask.title)”"), undo: snapshot)
+        }
+        changed()
+    }
+
+    /// Moves a step up (negative) or down the checklist.
+    func moveSubtask(_ id: UUID, _ subtaskID: UUID, by step: Int) {
+        guard let item = task(id), let index = item.subtasks.firstIndex(where: { $0.id == subtaskID }) else { return }
+        let target = min(max(index + step, 0), item.subtasks.count - 1)
+        guard target != index else { return }
+        update(id) { $0.subtasks.move(fromOffsets: [index], toOffset: target > index ? target + 1 : target) }
+        changed()
+    }
+
+    /// Drops steps left blank (a row added with Return and never written in).
+    func removeBlankSubtasks(_ id: UUID) {
+        guard task(id)?.subtasks.contains(where: { $0.title.isEmpty }) == true else { return }
+        update(id) { $0.subtasks.removeAll { $0.title.isEmpty } }
+        changed()
+    }
+
+    /// Sets a task's notes. Blank notes are none; clearing written notes can be undone.
+    func setNotes(_ id: UUID, _ notes: String?) {
+        let trimmed = notes?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let value = trimmed.isEmpty ? nil : trimmed
+        guard let task = task(id), task.notes != value else { return }
+        let snapshot = currentSnapshot
+        update(id) { $0.notes = value }
+        if value == nil {
+            announce(tr("已清除「\(task.title)」的备注", "Cleared the notes of “\(task.title)”"), undo: snapshot)
+        }
+        changed()
+    }
+
+    private func updateSubtask(_ id: UUID, _ subtaskID: UUID, _ body: (inout Subtask) -> Void) {
+        update(id) { item in
+            guard let index = item.subtasks.firstIndex(where: { $0.id == subtaskID }) else { return }
+            body(&item.subtasks[index])
+        }
+    }
+
     func startFocus(_ id: UUID) {
         guard let task = task(id) else { return }
         focus = FocusSession(taskID: id, startedAt: .now)
@@ -299,12 +399,82 @@ final class TaskStore {
         changed()
     }
 
-    func undo() {
-        guard let snapshot = notice?.undo else { return }
+    var canUndo: Bool { notice?.undo != nil || !undoStack.isEmpty }
+    var canRedo: Bool { !redoStack.isEmpty }
+
+    /// While a notice offers Undo, this is that Undo: back to just before what it reports.
+    /// Otherwise it steps back one action. `announcing` confirms it in a notice (for ⌘Z,
+    /// where nothing else on screen may show what changed).
+    func undo(announcing: Bool = false) {
+        let current = Self.meaningful(currentSnapshot)
+        if let snapshot = notice?.undo {
+            let target = Self.meaningful(snapshot)
+            if let index = undoStack.lastIndex(of: target) { undoStack.removeSubrange(index...) }
+            restore(snapshot, redo: current)
+        } else if let previous = undoStack.popLast() {
+            restore(previous, redo: current)
+        } else {
+            return
+        }
+        notice = announcing ? Notice(message: tr("已撤销", "Undone"), undo: nil) : nil
+    }
+
+    /// Takes back the last undo.
+    func redo(announcing: Bool = false) {
+        guard let next = redoStack.popLast() else { return }
+        undoStack.append(Self.meaningful(currentSnapshot))
+        tasks = next.tasks
+        focus = next.focus
+        settle()
+        notice = announcing ? Notice(message: tr("已重做", "Redone"), undo: nil) : nil
+    }
+
+    /// Ends the current group of changes, so the next one gets an undo step of its own (the
+    /// next turn of the run loop does this anyway).
+    func closeUndoGroup() {
+        groupOpen = false
+    }
+
+    private func restore(_ snapshot: Notice.Snapshot, redo current: Notice.Snapshot) {
+        redoStack.append(current)
         tasks = snapshot.tasks
         focus = snapshot.focus
-        notice = nil
-        changed()
+        settle()
+    }
+
+    /// Saves a state put back by undo or redo without making it a step of its own.
+    private func settle() {
+        committed = Self.meaningful(currentSnapshot)
+        groupOpen = false
+        scheduleSave()
+        onChange?()
+    }
+
+    /// Notes the state before this change as an undo step, unless it belongs to the step
+    /// already taken in this turn of the run loop.
+    private func recordHistory() {
+        let now = Self.meaningful(currentSnapshot)
+        let before = committed
+        committed = now
+        guard now != before else { return }
+        redoStack = []
+        guard !groupOpen else { return }
+        undoStack.append(before)
+        if undoStack.count > Self.historyLimit { undoStack.removeFirst(undoStack.count - Self.historyLimit) }
+        groupOpen = true
+        Task { [weak self] in self?.groupOpen = false }
+    }
+
+    /// A state as worth stepping back to: a blank checklist row (one opened with Return and
+    /// not yet written in) isn't a change of its own.
+    private static func meaningful(_ snapshot: Notice.Snapshot) -> Notice.Snapshot {
+        guard snapshot.tasks.contains(where: { $0.subtasks.contains { $0.title.isEmpty } }) else { return snapshot }
+        let tasks = snapshot.tasks.map { task in
+            var task = task
+            task.subtasks.removeAll { $0.title.isEmpty }
+            return task
+        }
+        return Notice.Snapshot(tasks: tasks, focus: snapshot.focus)
     }
 
     func announce(_ message: String, undo: Notice.Snapshot?) {
@@ -321,6 +491,7 @@ final class TaskStore {
     // MARK: - Persistence
 
     private func changed() {
+        recordHistory()
         scheduleSave()
         onChange?()
     }
