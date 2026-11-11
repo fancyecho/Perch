@@ -14,6 +14,8 @@ struct IslandPreferences: Equatable {
     /// Minutes after midnight of the evening review; nil when it's off.
     var review: Int?
     var haptics: Bool
+    /// The capsule rests as a bar instead of fading.
+    var capsuleRests: Bool
 
     static var current: IslandPreferences {
         let defaults = UserDefaults.standard
@@ -27,7 +29,8 @@ struct IslandPreferences: Equatable {
             reminders: defaults.bool(forKey: Pref.islandReminders),
             reminderTiming: .current,
             review: defaults.bool(forKey: Pref.reviewEnabled) ? defaults.integer(forKey: Pref.reviewTime) : nil,
-            haptics: defaults.bool(forKey: Pref.islandHaptics)
+            haptics: defaults.bool(forKey: Pref.islandHaptics),
+            capsuleRests: defaults.bool(forKey: Pref.capsuleRests)
         )
     }
 }
@@ -101,6 +104,8 @@ final class IslandController {
     private var clockTask: Task<Void, Never>?
     private var peekTask: Task<Void, Never>?
     private var cardFadeTask: Task<Void, Never>?
+    private var restTask: Task<Void, Never>?
+    private var wakeTask: Task<Void, Never>?
     /// Taking the keyboard during the window's first moments (as when a notification click launches
     /// Perch straight into the task list) sent SwiftUI into an endless constraints loop.
     private let keyboardReadyAt = Date.now.addingTimeInterval(1.5)
@@ -342,6 +347,7 @@ final class IslandController {
                 model.pinnedCardTop = top
                 model.cardMode = .panel
                 model.isCardFaded = false
+                model.cardRest = .awake
             }
         }
         if preferences.haptics { Haptics.tick() }
@@ -426,8 +432,22 @@ final class IslandController {
     private func cardHoverChanged(_ hovering: Bool) {
         peekTask?.cancel()
         cardFadeTask?.cancel()
+        wakeTask?.cancel()
         guard model.cardMode != .panel else {
             model.isCardHovering = hovering
+            return
+        }
+        // Asleep, the pointer has to rest a moment over the bar, so one passing on its way to a
+        // tab or the menu bar doesn't wake it.
+        if hovering, model.cardRest != .awake {
+            withAnimation(Self.hover) { model.isCardHovering = true }
+            startWatching()
+            wakeTask = Task { [weak self] in
+                try? await Task.sleep(for: .milliseconds(140))
+                guard let self, !Task.isCancelled, self.model.isCardHovering, NSEvent.pressedMouseButtons == 0 else { return }
+                self.wakeCard()
+                self.schedulePeek()
+            }
             return
         }
         withAnimation(Self.hover) {
@@ -436,17 +456,7 @@ final class IslandController {
         }
         if hovering {
             startWatching()
-            guard model.cardMode == .capsule, UserDefaults.standard.bool(forKey: Pref.peekOnHover) else { return }
-            peekTask = Task { [weak self] in
-                try? await Task.sleep(for: .milliseconds(480))
-                guard let self, !Task.isCancelled, self.model.isCardHovering, self.model.cardMode == .capsule,
-                      NSEvent.pressedMouseButtons == 0 else { return }
-                withAnimation(PanelController.morph) {
-                    self.model.peekRows = self.peekRows
-                    self.model.cardMode = .peek
-                }
-                self.refreshPointer()
-            }
+            schedulePeek()
         } else {
             if model.cardMode == .peek {
                 peekTask = Task { [weak self] in
@@ -460,19 +470,67 @@ final class IslandController {
         }
     }
 
+    /// Held over the capsule a moment longer, it peeks at the next few tasks.
+    private func schedulePeek() {
+        guard model.cardMode == .capsule, UserDefaults.standard.bool(forKey: Pref.peekOnHover) else { return }
+        peekTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(480))
+            guard let self, !Task.isCancelled, self.model.isCardHovering, self.model.cardMode == .capsule,
+                  self.model.cardRest == .awake, NSEvent.pressedMouseButtons == 0 else { return }
+            withAnimation(PanelController.morph) {
+                self.model.peekRows = self.peekRows
+                self.model.cardMode = .peek
+            }
+            self.refreshPointer()
+        }
+    }
+
     private var peekRows: Int {
         max(min(store.peekTasks(now: .now).count, PanelController.peekMaxRows), 1)
     }
 
-    /// The capsule settles back to see-through when nobody is looking at it.
+    /// The capsule settles back when nobody is looking at it: down to a bar, or see-through.
     private func scheduleCardFade(after delay: Double = 1.2) {
         cardFadeTask?.cancel()
         guard preferences.taskStyle == .capsule else { return }
         cardFadeTask = Task { [weak self] in
             try? await Task.sleep(for: .seconds(delay))
-            guard let self, !Task.isCancelled, !self.model.isCardHovering, self.model.cardMode == .capsule,
-                  UserDefaults.standard.bool(forKey: Pref.fadeWhenIdle) else { return }
-            withAnimation(.easeInOut(duration: 0.6)) { self.model.isCardFaded = true }
+            guard let self, !Task.isCancelled, !self.model.isCardHovering, self.model.cardMode == .capsule else { return }
+            if self.preferences.capsuleRests {
+                self.sleepCard()
+            } else if UserDefaults.standard.bool(forKey: Pref.fadeWhenIdle) {
+                withAnimation(.easeInOut(duration: 0.6)) { self.model.isCardFaded = true }
+            }
+        }
+    }
+
+    /// Bar to capsule like water gathering: pulled out sideways into a thin drop, then filling
+    /// down, a little past full and back. The words condense in once there's room (see `.condense`).
+    private func wakeCard() {
+        restTask?.cancel()
+        guard model.cardRest != .awake else { return }
+        if model.cardRest == .asleep {
+            withAnimation(.spring(duration: 0.28, bounce: 0.22)) { model.cardRest = .stretched }
+        }
+        restTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(100))
+            guard let self, !Task.isCancelled else { return }
+            withAnimation(.spring(duration: 0.46, bounce: 0.34)) { self.model.cardRest = .awake }
+            self.refreshPointer()
+        }
+    }
+
+    /// The same, the other way: the capsule drains up into a thin drop, which draws in to the bar.
+    private func sleepCard() {
+        restTask?.cancel()
+        guard model.cardRest == .awake, model.cardMode == .capsule, !model.isLocked else { return }
+        model.isCardFaded = false
+        withAnimation(.spring(duration: 0.32, bounce: 0.04)) { model.cardRest = .stretched }
+        restTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(180))
+            guard let self, !Task.isCancelled, self.model.cardRest == .stretched else { return }
+            withAnimation(.spring(duration: 0.5, bounce: 0.3)) { self.model.cardRest = .asleep }
+            self.refreshPointer()
         }
     }
 
@@ -588,6 +646,10 @@ final class IslandController {
     /// Today's list was just cleared.
     func celebrate() {
         flash(.celebration)
+        // The confetti falls inside the capsule, so a sleeping bar wakes for it.
+        guard model.cardRest != .awake else { return }
+        wakeCard()
+        scheduleCardFade(after: 4)
     }
 
     #if DEBUG
@@ -909,7 +971,8 @@ final class IslandController {
         // Over the focus blur the island only answers while it has something to answer, like a reminder.
         let overIsland = hitRect.contains(mouse) && (!model.isCurtained || model.banner != nil)
         let overCard = cardHitRect?.contains(mouse) ?? false
-        let interactive = overIsland || overCard
+        // The sleeping bar's reach only watches for the pointer; clicks there still go to the app below.
+        let interactive = overIsland || (overCard && model.cardRest == .awake)
         if panel.ignoresMouseEvents == interactive { panel.ignoresMouseEvents = !interactive }
         if overCard != model.isCardHovering { cardHoverChanged(overCard) }
         guard overIsland != model.isHovering else { return }
@@ -919,9 +982,15 @@ final class IslandController {
 
     private var cardHitRect: NSRect? {
         guard model.taskStyle == .capsule, !model.isLocked, !model.isCurtained, !(model.isMenuOpen && model.cardMode != .panel) else { return nil }
-        let size = model.cardSize
         let frame = panel.frame
-        return NSRect(x: frame.midX - size.width / 2, y: frame.maxY - model.cardTop - size.height, width: size.width, height: size.height)
+        let size = model.cardSize
+        let card = NSRect(x: frame.midX - size.width / 2, y: frame.maxY - model.cardTop - size.height, width: size.width, height: size.height)
+        guard model.cardMode == .capsule, preferences.capsuleRests else { return card }
+        // The bar's reach: a little up into the gap under the island, and well below the bar. Awake,
+        // the capsule keeps it too, so a pointer that woke the bar doesn't find itself outside.
+        let reach = IslandModel.barReach
+        let around = NSRect(x: frame.midX - reach.width / 2, y: frame.maxY - model.cardTop - reach.height + 4, width: reach.width, height: reach.height)
+        return model.cardRest == .awake ? card.union(around) : around
     }
 
     private var hitRect: NSRect {
@@ -1048,7 +1117,7 @@ final class IslandController {
 
     /// The capsule's own row, not the peek list under it, whose rows have swipes of their own.
     private var isPointerOnCapsuleRow: Bool {
-        guard model.isCardHovering, model.cardMode != .panel, let card = cardHitRect else { return false }
+        guard model.isCardHovering, model.cardMode != .panel, model.cardRest == .awake, let card = cardHitRect else { return false }
         let row = NSRect(x: card.minX, y: card.maxY - IslandModel.capsuleHoverHeight, width: card.width, height: IslandModel.capsuleHoverHeight)
         return row.contains(NSEvent.mouseLocation)
     }
@@ -1243,10 +1312,17 @@ final class IslandController {
         if force || new.review != old.review {
             scheduleReview()
         }
+        if !force, new.capsuleRests != old.capsuleRests {
+            // Shown whole the moment it's switched, so the change is seen; it rests again after.
+            model.isCardFaded = false
+            wakeCard()
+            scheduleCardFade(after: 2)
+        }
         if force || new.taskStyle != old.taskStyle {
             closeTaskList()
             model.taskStyle = new.taskStyle
             model.cardMode = .capsule
+            model.cardRest = .awake
             // The glass capsule and panel follow the system look; the merged list is dark like the island.
             panel.appearance = new.taskStyle == .merged ? NSAppearance(named: .darkAqua) : nil
             scheduleCardFade()

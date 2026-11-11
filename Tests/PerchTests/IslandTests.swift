@@ -236,6 +236,39 @@ struct TaskCapsuleTests {
         #expect(model.cardSize.width > resting.width && model.cardSize.height > resting.height)
     }
 
+    @Test func asleepItIsABarAFifthOfTheIsland() {
+        model.cardRest = .asleep
+        #expect(model.cardSize == model.barSize)
+        #expect(IslandModel.barWidths.contains(model.barSize.width))
+        // Beside a wider island it grows too, but never past the longest bar.
+        model.live = LiveActivity(leading: .artwork, trailing: .equalizer)
+        let live = model.layout(for: model.restState, hovering: false)
+        #expect(model.barSize.width == min(max(((live.width - live.shoulder * 2) * 0.2).rounded(), 44), 60))
+    }
+
+    @Test func underThePointerTheBarStirsButStaysABar() {
+        model.cardRest = .asleep
+        let bar = model.cardSize
+        model.isCardHovering = true
+        #expect(model.cardSize.width > bar.width && model.cardSize.height < IslandModel.stretchedHeight)
+    }
+
+    @Test func wakingItStretchesSidewaysBeforeFillingDown() {
+        let awake = model.cardSize
+        model.cardRest = .stretched
+        #expect(model.cardSize.width == awake.width)
+        #expect(model.cardSize.height > IslandModel.barHeight && model.cardSize.height < awake.height)
+    }
+
+    @Test func theBarHangsWhereTheCapsuleWould() {
+        let top = model.cardTop
+        model.cardRest = .asleep
+        #expect(model.cardTop == top)
+        // The panel ignores rest: opened, it's the panel.
+        model.cardMode = .panel
+        #expect(model.cardSize == IslandModel.panelSize)
+    }
+
     @Test func capsuleRidesBelowWhateverTheIslandShows() {
         model.banner = .track
         #expect(model.cardTop == model.layout(for: .banner(.track), hovering: false).height + IslandModel.capsuleGap)

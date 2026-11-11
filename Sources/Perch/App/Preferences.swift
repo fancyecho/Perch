@@ -5,6 +5,8 @@ enum Pref {
     static let peekOnHover = "peekOnHover"
     static let fadeWhenIdle = "fadeWhenIdle"
     static let idleOpacity = "idleOpacity"
+    /// The capsule under the notch draws itself in to a short bar while nobody looks at it.
+    static let capsuleRests = "capsule.restsAsBar"
     static let pillOrigin = "pillOrigin"
     static let completionSound = "completionSound"
     static let celebrations = "celebrations"
@@ -60,6 +62,7 @@ enum Pref {
             peekOnHover: true,
             fadeWhenIdle: true,
             idleOpacity: 0.6,
+            capsuleRests: true,
             completionSound: true,
             celebrations: true,
             todayTimeline: true,

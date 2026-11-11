@@ -21,18 +21,22 @@ struct TaskCard: View {
                 PanelView()
                     .frame(width: IslandModel.panelSize.width, height: IslandModel.panelSize.height)
                     .transition(.opacity.animation(.easeOut(duration: 0.22).delay(0.06)))
-            } else {
+            } else if model.cardRest == .awake {
                 CapsuleContent(
                     hovering: model.isCardHovering || model.cardMode == .peek,
                     peeking: model.cardMode == .peek,
                     onPress: { isPressed = $0 }
                 )
                 .frame(width: size.width, height: size.height, alignment: .top)
-                .transition(.opacity.animation(.easeOut(duration: 0.14)))
+                .transition(.condense)
             }
         }
         .frame(width: size.width, height: size.height, alignment: .top)
         .overlay { ConfettiRain(trigger: feedback.celebrationCount) }
+        // Asleep the glass is a bead of light, faintly filled so it reads on any wallpaper.
+        .background {
+            shape.fill(Color.primary.opacity(model.cardRest == .awake ? 0 : model.isCardHovering ? 0.4 : 0.28))
+        }
         .clipShape(shape)
         .glassEffect(.regular, in: shape)
         .contentShape(shape)
@@ -51,6 +55,30 @@ struct TaskCard: View {
         case .peek: 20
         case .panel: 24
         }
+    }
+}
+
+/// The capsule's words gathering out of the glass as it fills, the way the island's content
+/// sharpens in: a beat after the shape, from a blur; and gone at once when it draws in.
+private struct Condense: ViewModifier {
+    let isActive: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .opacity(isActive ? 0 : 1)
+            .blur(radius: isActive ? 6 : 0)
+            .scaleEffect(x: isActive ? 0.9 : 1, y: isActive ? 0.6 : 1, anchor: .top)
+    }
+}
+
+extension AnyTransition {
+    static var condense: AnyTransition {
+        .asymmetric(
+            insertion: .modifier(active: Condense(isActive: true), identity: Condense(isActive: false))
+                .animation(.smooth(duration: 0.3).delay(0.12)),
+            removal: .modifier(active: Condense(isActive: true), identity: Condense(isActive: false))
+                .animation(.easeOut(duration: 0.12))
+        )
     }
 }
 

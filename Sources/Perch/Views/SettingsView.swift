@@ -184,6 +184,7 @@ private struct TasksPane: View {
     @AppStorage(Pref.peekOnHover) private var peekOnHover = true
     @AppStorage(Pref.fadeWhenIdle) private var fadeWhenIdle = true
     @AppStorage(Pref.idleOpacity) private var idleOpacity = 0.6
+    @AppStorage(Pref.capsuleRests) private var capsuleRests = true
     @AppStorage(Pref.todayTimeline) private var showsTimeline = true
     @AppStorage(Pref.completionSound) private var completionSound = true
     @AppStorage(Pref.celebrations) private var celebrations = true
@@ -231,8 +232,17 @@ private struct TasksPane: View {
                     Text(tr("独立浮动胶囊", "Floating pill")).tag(TaskStyle.floating.rawValue)
                 }
                 Toggle(tr("悬停时预览接下来的任务", "Peek at upcoming tasks on hover"), isOn: $peekOnHover)
-                Toggle(tr("闲置时淡化", "Fade when idle"), isOn: $fadeWhenIdle)
-                if fadeWhenIdle {
+                if taskStyle == TaskStyle.capsule.rawValue {
+                    Toggle(isOn: $capsuleRests) {
+                        SettingLabel(tr("闲置时收成细条", "Rest as a bar when idle"),
+                                     tr("平时只留刘海下一道玻璃细条，鼠标停上去时汇成胶囊", "Just a glass bar under the notch until the pointer rests on it"))
+                    }
+                }
+                let rests = taskStyle == TaskStyle.capsule.rawValue && capsuleRests
+                if !rests {
+                    Toggle(tr("闲置时淡化", "Fade when idle"), isOn: $fadeWhenIdle)
+                }
+                if !rests, fadeWhenIdle {
                     Slider(value: $idleOpacity, in: 0.25...0.9) {
                         Text(tr("闲置透明度", "Idle opacity"))
                     } minimumValueLabel: {

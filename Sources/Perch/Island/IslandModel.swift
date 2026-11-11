@@ -51,6 +51,13 @@ enum CardMode: Equatable {
     case capsule, peek, panel
 }
 
+/// How far the capsule has drawn itself in while nobody looks at it (Settings › Tasks). Waking,
+/// it goes asleep → stretched → awake: a drop pulled sideways first, then filling down into the
+/// capsule; going to sleep runs the same way back.
+enum CardRest: Equatable {
+    case awake, stretched, asleep
+}
+
 /// The detail under the status page's gauges.
 enum StatusMetric: Equatable {
     case cpu, memory, temperature, network
@@ -224,6 +231,16 @@ final class IslandModel {
     static let capsuleHeight: CGFloat = 34
     static let capsuleHoverHeight: CGFloat = 46
     static let capsuleMinWidth: CGFloat = 196
+    /// The capsule asleep: a short glass bar under the notch, like the iPhone's home indicator. About
+    /// a fifth of the island at rest, so it reads as a drop hanging from it rather than a second
+    /// bar; it widens and narrows with the island.
+    static let barShare: CGFloat = 0.2
+    static let barWidths: ClosedRange<CGFloat> = 44...60
+    static let barHeight: CGFloat = 5
+    /// Halfway between bar and capsule, the drop is as wide as the capsule and still thin.
+    static let stretchedHeight: CGFloat = 9
+    /// Where the pointer wakes the bar: far wider and taller than the bar itself.
+    static let barReach = CGSize(width: 168, height: 28)
     static let peekRowHeight: CGFloat = 34
     static let panelSize = CGSize(width: 368, height: 560)
     /// The open island on its status page: gauges and a detail strip under them.
@@ -245,6 +262,8 @@ final class IslandModel {
     var isCardHovering = false
     /// The capsule fades back while nobody is looking at it.
     var isCardFaded = false
+    /// Or draws itself in to a bar.
+    var cardRest = CardRest.awake
     var peekRows = 0
     /// An open panel stays where it opened while the island above it changes.
     var pinnedCardTop: CGFloat?
@@ -352,6 +371,12 @@ final class IslandModel {
         let rest = layout(for: restState, hovering: false)
         let width = max(rest.width - rest.shoulder * 2, Self.capsuleMinWidth)
         switch cardMode {
+        case .capsule where cardRest == .asleep:
+            // Under the pointer it stirs at once, a little longer and fuller, before it gathers.
+            let bar = barSize
+            return isCardHovering ? CGSize(width: bar.width + 10, height: bar.height + 1) : bar
+        case .capsule where cardRest == .stretched:
+            return CGSize(width: width, height: Self.stretchedHeight)
         case .capsule:
             return isCardHovering
                 ? CGSize(width: width + 16, height: Self.capsuleHoverHeight)
@@ -361,6 +386,12 @@ final class IslandModel {
         case .panel:
             return Self.panelSize
         }
+    }
+
+    var barSize: CGSize {
+        let rest = layout(for: restState, hovering: false)
+        let width = ((rest.width - rest.shoulder * 2) * Self.barShare).rounded()
+        return CGSize(width: min(max(width, Self.barWidths.lowerBound), Self.barWidths.upperBound), height: Self.barHeight)
     }
 
     func expand() {
