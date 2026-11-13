@@ -1,5 +1,6 @@
 #if DEBUG
 import AppKit
+import PerchLine
 import SwiftUI
 
 /// Lets a script drive Perch while developing, for screenshots of states that otherwise need the
@@ -20,6 +21,9 @@ extension AppDelegate {
         case "status": island?.openStatus()
         case "close": island?.closeTaskList()
         case "line": line?.toggleLine()
+        case "target": line?.targetSide = parts.dropFirst().first == "left" ? .left : .right
+        case "snapfirefly": FireflySnapshot.write(to: URL(fileURLWithPath: NSTemporaryDirectory() + "perch-firefly.png"))
+        case "snapbirds": BirdSnapshot.write(to: URL(fileURLWithPath: NSTemporaryDirectory() + "perch-birds.png"))
         case "hang":
             // hang:<folder>: everything in it, as new captures.
             let folder = URL(fileURLWithPath: parts.dropFirst().joined(separator: ":"))

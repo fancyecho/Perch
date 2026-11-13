@@ -25,6 +25,8 @@ public final class LineController: NSObject {
         super.init()
     }
     private var panel: LinePanel!
+    /// The birds fly in a window of their own, up over the menu bar and off the top of the screen.
+    private var birdWindow: BirdWindow!
     private var watcher: ScreenshotWatcher!
     /// In inbox mode, a second watcher on the Desktop. If a macOS version
     /// ignores the screenshot settings (macOS 27 renamed one), captures keep
@@ -81,12 +83,28 @@ public final class LineController: NSObject {
         set { UserDefaults.standard.set(!newValue, forKey: "quietHang") }
     }
 
+    /// How long the line stays down by itself, after something new hangs, before it goes up.
+    public static let stayChoices: [TimeInterval] = [3, 5, 8, 12]
+    public static var staysDown: TimeInterval {
+        get {
+            let seconds = UserDefaults.standard.double(forKey: "lineStaysDown")
+            return stayChoices.contains(seconds) ? seconds : 5
+        }
+        set { UserDefaults.standard.set(newValue, forKey: "lineStaysDown") }
+    }
+
     public func start() {
         guard !started else { return }
         started = true
         let host = NSHostingView(rootView: LineView(line: line))
         host.sizingOptions = []
-        panel = LinePanel(content: host)
+        let drop = LineDropView(content: host)
+        drop.target = { [weak self] point in self?.dropTarget(at: point) }
+        drop.onHover = { [weak self] side in
+            if self?.line.dropSide != side { self?.line.dropSide = side }
+        }
+        drop.onDrop = { [weak self] side, point in self?.dropOnLine(side, at: point) ?? false }
+        panel = LinePanel(content: drop)
         place(on: nil)
 
         if Inbox.isEnabled { Inbox.apply() }
@@ -106,14 +124,21 @@ public final class LineController: NSObject {
         Markup.shared.onSaved = { [weak self] url in self?.line.reloadThumbnail(for: url) }
         Trim.shared.onSaved = { [weak self] url in self?.line.reloadThumbnail(for: url) }
         panel.onScroll = { [weak self] event in
-            // Sideways on a trackpad, or the wheel of a mouse.
+            guard let self else { return }
+            // Sideways on a trackpad, or the wheel of a mouse, on the line under the pointer.
             let delta = abs(event.scrollingDeltaX) >= abs(event.scrollingDeltaY)
                 ? event.scrollingDeltaX : event.scrollingDeltaY
-            self?.line.scroll(by: event.hasPreciseScrollingDeltas ? delta : delta * 12)
+            let x = NSEvent.mouseLocation.x - self.panel.frame.minX
+            self.line.scroll(by: event.hasPreciseScrollingDeltas ? delta : delta * 12,
+                             on: Layout.side(at: x, width: self.panel.frame.width))
         }
+        line.flock.ground = { [weak self] in self?.birdGround() }
+        birdWindow = BirdWindow(flock: line.flock)
+        birdWindow.follow(panel)
         line.onFall = { [weak self] item in self?.fall(item) }
         line.onHold = { [weak self] id in self?.hold(id) }
         line.onHangBack = { id in Held.hangBack(id) }
+        line.onMoveAcross = { [weak self] id, side in _ = self?.moveAcross(id, to: side, from: nil) }
 
         line.$items
             .receive(on: RunLoop.main)
@@ -195,6 +220,7 @@ public final class LineController: NSObject {
         observers = []
         Held.hangEverythingBack()
         panel.orderOut(nil)
+        birdWindow?.close()
         isPresent = false
         isRevealed = false
         if (NSApp.servicesProvider as AnyObject?) === self { NSApp.servicesProvider = nil }
@@ -203,6 +229,7 @@ public final class LineController: NSObject {
     /// Hangs the line on a screen (the pointer's without one), leaving the island its middle.
     private func place(on screen: NSScreen?) {
         panel.placeOnScreen(screen)
+        birdWindow?.follow(panel)
         let frame = panel.frame
         Layout.gap = panel.screen.flatMap(middle).map { ($0.lowerBound - frame.minX)...($0.upperBound - frame.minX) }
         updateCapacity()
@@ -324,6 +351,7 @@ public final class LineController: NSObject {
     /// An empty line goes away, unless it was opened on purpose.
     private func itemsChanged() {
         Held.forget(except: Set(line.items.filter { !$0.falling && $0.held }.map(\.id)))
+        if isRevealed { line.flock.makeRoom(at: birdGround()?.taken ?? []) }
         guard line.liveCount == 0, !keepOpen else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) { [weak self] in
             guard let self, self.line.liveCount == 0, !self.keepOpen else { return }
@@ -338,7 +366,7 @@ public final class LineController: NSObject {
         place(on: screen)
         wanted = true
         refresh()
-        if Self.peeksAtNew { reveal(peekFor: 2.5) }
+        if Self.peeksAtNew { reveal(peekFor: Self.staysDown) }
     }
 
     // MARK: The capture flying to the line
@@ -355,6 +383,13 @@ public final class LineController: NSObject {
         let screen = from.flatMap { from in
             NSScreen.screens.first { NSMouseInRect(CGPoint(x: from.midX, y: from.midY), $0.frame, false) }
         }
+        // For the left line, the file goes into its folder first. If it cannot, it hangs on the
+        // right as before.
+        var url = url
+        var side = line.target
+        if side == .left {
+            if let moved = line.adoptForLeft(url) { url = moved } else { side = .right }
+        }
         // Every capture brings the line down before it hangs, on the screen it
         // was taken on. On a full line the oldest photo then falls in view as
         // the new one flies in.
@@ -362,7 +397,7 @@ public final class LineController: NSObject {
         // A screenshot macOS took already played its shutter, so it hangs
         // without a chime of its own. Copied images and watched folders,
         // which come with no sound, keep it.
-        guard let id = line.hang(url, quietly: from != nil, flying: from != nil) else {
+        guard let id = line.hang(url, on: side, quietly: from != nil, flying: from != nil) else {
             // Nothing hung after all, so an empty line goes away again.
             itemsChanged()
             return
@@ -410,13 +445,15 @@ public final class LineController: NSObject {
     /// Where a card will hang, in screen coordinates, using the same layout
     /// as the line view.
     private func cardFrame(for id: UUID) -> CGRect? {
-        guard let index = line.items.firstIndex(where: { $0.id == id }) else { return nil }
+        guard let item = line.items.first(where: { $0.id == id }) else { return nil }
+        let mine = line.items(on: item.side)
+        guard let index = mine.firstIndex(where: { $0.id == id }) else { return nil }
         let width = panel.frame.width
-        let x = Layout.x(index: index, count: line.items.count, width: width,
-                         visible: line.visibleCount, scroll: line.scroll, pinned: line.pinnedLead)
+        let x = Layout.x(index: index, count: mine.count, side: item.side, width: width,
+                         scroll: line.scroll(on: item.side), pinned: line.pinnedLead(on: item.side))
         let viewTop = Layout.ropeY(x: x, width: width) - Layout.pinAbove
         let cardTop = viewTop + PeggedView.cardOffsetBelowTop
-        let size = PeggedView.cardSize(for: line.items[index].thumb.size)
+        let size = PeggedView.cardSize(for: item.thumb.size)
         return CGRect(x: panel.frame.minX + x - size.width / 2,
                       y: panel.frame.maxY - cardTop - size.height,
                       width: size.width, height: size.height)
@@ -487,10 +524,25 @@ public final class LineController: NSObject {
     private func setRevealed(_ on: Bool) {
         guard on != isRevealed else { return }
         isRevealed = on
-        line.revealed = on
+        // Birds on the line take off before it goes up, and come to it once it is down.
+        var birdsLead: TimeInterval = 0
+        if on {
+            line.revealed = true
+            line.flock.lineCameDown()
+        } else {
+            birdsLead = line.flock.lineGoesUp()
+            if birdsLead > 0 {
+                DispatchQueue.main.asyncAfter(deadline: .now() + birdsLead) { [weak self] in
+                    guard let self, !self.isRevealed else { return }
+                    self.line.revealed = false
+                }
+            } else {
+                line.revealed = false
+            }
+        }
         if mouseTimer != nil { startMouseTracking() }
         // It always comes down showing the newest.
-        if on { line.scroll = 0 }
+        if on { line.scroll = [:] }
         // Tucked away, the line leaves no window behind: an invisible strip
         // over the top of the screen would still sit above other apps for
         // anything that checks what is on top, like screen automation.
@@ -500,7 +552,8 @@ public final class LineController: NSObject {
                 DispatchQueue.main.async { [weak self] in self?.keepOnActiveSpace() }
             }
         } else {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+            let away = 0.3 + birdsLead
+            DispatchQueue.main.asyncAfter(deadline: .now() + away) { [weak self] in
                 guard let self, !self.isRevealed else { return }
                 self.panel.orderOut(nil)
             }
@@ -571,13 +624,13 @@ public final class LineController: NSObject {
         return NSRect(x: screen.frame.minX, y: screen.frame.maxY - h, width: screen.frame.width, height: h)
     }
 
-    /// The part of the menu bar that brings the line down: the middle third,
-    /// so the menus on the left and the icons on the right stay easy to reach.
-    /// Where the island sits in the middle, the third without it: resting on
+    /// The part of the menu bar that brings the line down: the middle half,
+    /// so the menus on the left and most icons on the right stay easy to reach.
+    /// Where the island sits in the middle, the half without it: resting on
     /// the island opens the island instead.
     private func revealBands(of screen: NSScreen) -> [NSRect] {
         let bar = menuBarBand(of: screen)
-        let width = bar.width / 3
+        let width = bar.width / 2
         let third = NSRect(x: bar.midX - width / 2, y: bar.minY, width: width, height: bar.height)
         guard let middle = middle(screen) else { return [third] }
         return [NSRect(x: third.minX, y: bar.minY, width: max(0, middle.lowerBound - third.minX), height: bar.height),
@@ -609,7 +662,7 @@ public final class LineController: NSObject {
         }
     }
     /// How long the cursor is away before the line tucks back up.
-    private static let retractDelay: TimeInterval = 0.5
+    private static let retractDelay: TimeInterval = 0.9
 
     private func tick() {
         let mouse = NSEvent.mouseLocation
@@ -651,6 +704,9 @@ public final class LineController: NSObject {
         }
 
         updateMousePassThrough(mouse)
+        let local = panel.convertPoint(fromScreen: mouse)
+        let pointer = CGPoint(x: local.x, y: panel.frame.height - local.y)
+        line.flock.tick(pointer: NSMouseInRect(mouse, panel.frame.insetBy(dx: 0, dy: -30), false) ? pointer : nil)
 
         // The line's zone runs from its lowest point up to the top of the
         // screen, menu bar included, so moving up never hides it.
@@ -685,15 +741,54 @@ public final class LineController: NSObject {
         let local = panel.convertPoint(fromScreen: mouse)
         let flipped = CGPoint(x: local.x, y: panel.frame.height - local.y)
         var overPhoto = line.hitRects.values.contains { $0.insetBy(dx: -4, dy: -4).contains(flipped) }
+            || line.labelRects.contains { $0.insetBy(dx: -2, dy: -2).contains(flipped) }
         // A line longer than the screen also takes the band the photos hang
         // in, gaps included, so a swipe anywhere along it moves it.
-        if !overPhoto, line.items.count > line.visibleCount, Line.keepOnLine != nil {
+        if !overPhoto, Line.keepOnLine != nil,
+           LineSide.allCases.contains(where: { line.items(on: $0).count > line.visible(on: $0) }) {
             let band = line.hitRects.values.reduce(CGRect.null) { $0.union($1) }
             overPhoto = !band.isNull && flipped.y >= band.minY - 4 && flipped.y <= band.maxY + 4
         }
         if panel.ignoresMouseEvents == overPhoto {
             panel.ignoresMouseEvents = !overPhoto
         }
+    }
+
+    // MARK: Dragging to the other line
+
+    /// The other line, while the photo being dragged is over it.
+    private func dropTarget(at point: NSPoint) -> LineSide? {
+        guard let id = line.draggingID, let item = line.items.first(where: { $0.id == id && !$0.falling }) else { return nil }
+        let side = Layout.side(at: point.x, width: panel.frame.width)
+        return side == item.side ? nil : side
+    }
+
+    /// Dropped on the other line: it moves there, and flies from where it was let go to its place.
+    private func dropOnLine(_ side: LineSide, at point: NSPoint) -> Bool {
+        guard let id = line.draggingID, let item = line.items.first(where: { $0.id == id }) else { return false }
+        let size = PeggedView.cardSize(for: item.thumb.size)
+        let from = CGRect(x: point.x - size.width / 2, y: point.y - size.height / 2, width: size.width, height: size.height)
+        return moveAcross(id, to: side, from: from)
+    }
+
+    /// Over to the other line in one movement: the card leaves its place at once, from where it
+    /// hangs or where it was dropped, and flies to its new place while the others make room.
+    @discardableResult
+    private func moveAcross(_ id: UUID, to side: LineSide, from start: CGRect?) -> Bool {
+        guard line.items.contains(where: { $0.id == id && !$0.falling }) else { return false }
+        let from = start ?? cardFrame(for: id)
+        line.setFlying(id)
+        line.move(id, to: side)
+        guard line.items.first(where: { $0.id == id })?.side == side else {
+            line.land(id)
+            return false
+        }
+        guard let from else {
+            line.land(id)
+            return true
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.03) { [weak self] in self?.fly(id, from: from) }
+        return true
     }
 
     // MARK: Holding
@@ -800,7 +895,7 @@ public final class LineController: NSObject {
             place(on: nil)
             wanted = true
             refresh()
-            reveal(peekFor: 2.5)
+            reveal(peekFor: Self.staysDown)
         }
         line.putBack()
     }
@@ -848,12 +943,26 @@ public final class LineController: NSObject {
     }
 
     private func updateCapacity() {
-        let usable = panel.frame.width - 200
-        let split = Layout.segments(width: panel.frame.width).count == 2
-        let fits = split ? max(2, min(12, Layout.placeCenters(width: panel.frame.width).count))
-                         : max(3, min(12, Int(usable / Layout.spacing)))
-        line.visibleCount = fits
-        line.maxItems = max(fits, Line.keepOnLine ?? fits)
+        for side in LineSide.allCases {
+            line.visibleCount[side] = max(1, min(8, Layout.placeCenters(side, width: panel.frame.width).count))
+        }
+    }
+
+    /// Where birds may sit: everywhere along the lines but on a clip or a knot.
+    private func birdGround() -> (width: CGFloat, taken: [CGFloat])? {
+        let width = panel.frame.width
+        guard width > 0 else { return nil }
+        var taken: [CGFloat] = []
+        for side in LineSide.allCases {
+            let mine = line.items(on: side)
+            let pinned = line.pinnedLead(on: side)
+            let xs = mine.indices.map {
+                Layout.x(index: $0, count: mine.count, side: side, width: width, scroll: line.scroll(on: side), pinned: pinned)
+            }
+            taken += xs
+            if let last = mine.lastIndex(where: \.kept) { taken.append(xs[last] + Layout.spacing / 2) }
+        }
+        return (width, taken)
     }
 
     // MARK: Settings, for Perch's
@@ -906,6 +1015,44 @@ public final class LineController: NSObject {
     public func stopWatching(_ folder: URL) {
         Self.extraFolders.removeAll { $0.standardizedFileURL == folder.standardizedFileURL }
         startWatcher()
+    }
+
+    /// Which line new screenshots hang on.
+    public var targetSide: LineSide {
+        get { line.target }
+        set { line.target = newValue }
+    }
+
+    /// The name on each line's label: the left one's folder, and Screenshots.
+    public func name(of side: LineSide) -> String { Line.name(of: side) }
+
+    public var leftFolder: URL { Line.leftFolder }
+
+    /// Choose the left line's folder. What already hangs there stays where it is.
+    public func chooseLeftFolder() {
+        let open = NSOpenPanel()
+        open.canChooseDirectories = true
+        open.canChooseFiles = false
+        open.canCreateDirectories = true
+        open.allowsMultipleSelection = false
+        open.prompt = L("Choose")
+        open.message = L("Screenshots hung on the left line are kept in this folder.")
+        open.directoryURL = Line.leftFolder.deletingLastPathComponent()
+        NSApp.activate(ignoringOtherApps: true)
+        guard open.runModal() == .OK, let url = open.url else { return }
+        Line.leftFolder = url
+        line.objectWillChange.send()
+    }
+
+    public func revealLeftFolder() {
+        let folder = Line.leftFolder
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        NSWorkspace.shared.open(folder)
+    }
+
+    public static var birdsEnabled: Bool {
+        get { Flock.isEnabled }
+        set { Flock.isEnabled = newValue }
     }
 
     public func openScreenshotsFolder() {

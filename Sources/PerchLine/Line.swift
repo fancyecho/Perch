@@ -5,10 +5,20 @@ import os
 
 let log = Logger(subsystem: "app.perch.Perch", category: "line")
 
+/// The two lines either side of the island. Each keeps its own photos, in its own folder: the
+/// right one the screenshots that come and go, the left one what you collect, like notes from a class.
+public enum LineSide: String, CaseIterable, Sendable {
+    case left, right
+
+    var other: LineSide { self == .left ? .right : .left }
+}
+
 /// One screenshot hanging on the line.
 struct Pegged: Identifiable, Equatable {
     let id = UUID()
-    let url: URL
+    /// Changes when the photo moves to the other line, and its file with it.
+    var url: URL
+    var side: LineSide = .right
     var thumb: NSImage
     /// Every photo hangs a little crooked, like on a real line.
     let tilt = Double.random(in: -2.5...2.5)
@@ -27,7 +37,7 @@ struct Pegged: Identifiable, Equatable {
     var isRecording: Bool { PerchLine.isRecording(url) }
 
     static func == (a: Pegged, b: Pegged) -> Bool {
-        a.id == b.id && a.falling == b.falling && a.flying == b.flying && a.kept == b.kept && a.byHand == b.byHand && a.held == b.held && a.thumb === b.thumb
+        a.id == b.id && a.side == b.side && a.url == b.url && a.falling == b.falling && a.flying == b.flying && a.kept == b.kept && a.byHand == b.byHand && a.held == b.held && a.thumb === b.thumb
     }
 }
 
@@ -46,14 +56,116 @@ final class Line: ObservableObject {
     /// Card frames in window coordinates, reported by the views. The panel
     /// uses them to only catch clicks over photos and let the rest through.
     var hitRects: [UUID: CGRect] = [:]
+    /// The labels between the two lines, which take clicks too.
+    var labelRects: [CGRect] = []
+    /// While a photo is dragged over the other line: that line, where it would hang.
+    @Published var dropSide: LineSide?
 
-    var maxItems = 8
-    /// How many photos fit across the screen. With Keep on line set, the
-    /// line can hold more, and the rest are reached by scrolling.
-    var visibleCount = 8
-    /// How far the line is scrolled towards older photos, in points; 0 shows
-    /// the newest.
-    @Published var scroll: CGFloat = 0
+    /// How many photos fit across each line. With Keep on line set, a line
+    /// can hold more, and the rest are reached by scrolling.
+    var visibleCount: [LineSide: Int] = [.left: 4, .right: 4]
+    /// How far each line is scrolled towards older photos, in points; 0
+    /// shows the newest.
+    @Published var scroll: [LineSide: CGFloat] = [:]
+
+    /// The birds that come to sit on the line while it is down.
+    let flock = Flock()
+
+    func visible(on side: LineSide) -> Int { visibleCount[side] ?? 4 }
+
+    /// How many photos a line keeps before its oldest falls off.
+    func maxItems(on side: LineSide) -> Int {
+        let fits = visible(on: side)
+        return max(fits, Line.keepOnLine ?? fits)
+    }
+
+    func scroll(on side: LineSide) -> CGFloat { scroll[side] ?? 0 }
+
+    /// The photos on one line, in order, empty places included.
+    func items(on side: LineSide) -> [Pegged] { items.filter { $0.side == side } }
+
+    func liveCount(on side: LineSide) -> Int { items.filter { $0.side == side && !$0.falling }.count }
+
+    // MARK: Two lines, two folders
+
+    /// Where new captures hang. Switched from the labels between the two
+    /// lines, Perch's menu or its settings.
+    @Published var target: LineSide = LineSide(rawValue: UserDefaults.standard.string(forKey: "lineTarget") ?? "") ?? .right {
+        didSet { UserDefaults.standard.set(target.rawValue, forKey: "lineTarget") }
+    }
+
+    /// The left line's folder: chosen in settings, or one in Pictures,
+    /// made the first time something hangs there.
+    static var leftFolder: URL {
+        get {
+            if let path = UserDefaults.standard.string(forKey: "leftLineFolder"), !path.isEmpty {
+                return URL(fileURLWithPath: path, isDirectory: true)
+            }
+            // Named once, so switching Perch's language later does not move it.
+            let pictures = FileManager.default.urls(for: .picturesDirectory, in: .userDomainMask)[0]
+            let folder = pictures.appendingPathComponent(L("Kept Screenshots"), isDirectory: true)
+            UserDefaults.standard.set(folder.path, forKey: "leftLineFolder")
+            return folder
+        }
+        set { UserDefaults.standard.set(newValue.path, forKey: "leftLineFolder") }
+    }
+
+    /// The name on the left line's label.
+    static var leftName: String { FileManager.default.displayName(atPath: leftFolder.path) }
+
+    static func name(of side: LineSide) -> String { side == .left ? leftName : L("Screenshots") }
+
+    private static func isInside(_ url: URL, _ folder: URL) -> Bool {
+        url.standardizedFileURL.path.hasPrefix(folder.standardizedFileURL.path + "/")
+    }
+
+    /// Moves a file into a folder under a name nothing else has there, and
+    /// the clipboard with it. Nil when it could not be moved.
+    private func move(_ url: URL, into folder: URL) -> URL? {
+        if Self.isInside(url, folder) { return url }
+        do {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            let target = uniqueURL(in: folder, for: url.lastPathComponent)
+            try FileManager.default.moveItem(at: url, to: target)
+            clipboardFollows(url, to: target)
+            log.notice("Moved \(url.lastPathComponent, privacy: .public) to \(folder.lastPathComponent, privacy: .public)")
+            return target
+        } catch {
+            log.error("Could not move \(url.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            return nil
+        }
+    }
+
+    /// A new capture for the left line goes into its folder first. Nil when
+    /// it could not, and it then hangs on the right as before.
+    func adoptForLeft(_ url: URL) -> URL? { move(url, into: Line.leftFolder) }
+
+    /// From a photo's menu: over to the other line, and into its folder. What
+    /// was hung by hand from elsewhere stays where it is. Going right, a photo
+    /// from the left folder moves into Perch's screenshot folder, where the
+    /// cross sends it to the Trash, while Perch handles screenshots.
+    func move(_ id: UUID, to side: LineSide) {
+        guard let i = items.firstIndex(where: { $0.id == id && !$0.falling && !$0.held }), items[i].side != side else { return }
+        var url = items[i].url
+        if !items[i].byHand {
+            if side == .left {
+                guard let moved = move(url, into: Line.leftFolder) else { return NSSound.beep() }
+                url = moved
+            } else if Inbox.isEnabled, Self.isInside(url, Line.leftFolder), let moved = move(url, into: Inbox.folder) {
+                url = moved
+            }
+        }
+        var item = items.remove(at: i)
+        item.url = url
+        item.side = side
+        hitRects[id] = nil
+        items.append(item)
+        scroll[side] = 0
+        keepKeptFirst()
+        letGoOverflow(on: side, sparing: [id])
+        save()
+        play("Tink", volume: 0.35)
+    }
 
     /// Keep on line, from the menu bar: how many photos the line keeps, or
     /// nil for as many as fit across the screen.
@@ -74,16 +186,23 @@ final class Line: ObservableObject {
 
     var liveCount: Int { items.filter { !$0.falling }.count }
 
-    /// Photos hung by hand. They hang together at the left end of the line,
-    /// before the knot, and never fall to make room.
-    var keptCount: Int { items.filter { !$0.falling && $0.kept }.count }
+    /// How many photos at the start of a line are pinned, the empty places
+    /// of pinned ones that just came down included. Pinned photos hang
+    /// together at the left end of their line, before the knot, and never
+    /// fall to make room.
+    func pinnedLead(on side: LineSide) -> Int { items(on: side).prefix { $0.kept }.count }
 
-    /// How many photos at the start of the line are pinned, the empty
-    /// places of pinned ones that just came down included.
-    var pinnedLead: Int { items.prefix { $0.kept }.count }
+    /// The oldest photo on a line that can fall: the first one past the knot.
+    private func oldestLoose(on side: LineSide, sparing: Set<UUID> = []) -> Pegged? {
+        items.first { $0.side == side && !$0.falling && !$0.kept && !$0.held && !sparing.contains($0.id) }
+    }
 
-    /// The oldest photo that can fall: the first one past the knot.
-    private var oldestLoose: Pegged? { items.first { !$0.falling && !$0.kept && !$0.held } }
+    /// A full line lets its oldest photos fall off the far end.
+    private func letGoOverflow(on side: LineSide, sparing: Set<UUID> = []) {
+        while liveCount(on: side) > maxItems(on: side), let oldest = oldestLoose(on: side, sparing: sparing) {
+            letGo(oldest.id)
+        }
+    }
 
     private let storeKey = "pegged"
 
@@ -95,24 +214,33 @@ final class Line: ObservableObject {
     // MARK: Hanging and dropping
 
     @discardableResult
-    func hang(_ url: URL, quietly: Bool = false, flying: Bool = false) -> UUID? {
+    func hang(_ url: URL, on side: LineSide = .right, quietly: Bool = false, flying: Bool = false) -> UUID? {
         guard !items.contains(where: { $0.url == url && !$0.falling }),
               let thumb = makeThumbnail(url) else { return nil }
         var item = Pegged(url: url, thumb: thumb)
         item.flying = flying
+        item.side = side
         // The line moves anyway for a new photo, so the gaps close with it.
         sweepFallen()
         items.append(item)
-        scroll = 0
-        // A full line lets the oldest photo fall off the far end. Only one: a
-        // line hung on a wider screen keeps its length here instead of losing
-        // several photos to a single capture.
-        if liveCount > maxItems, let oldest = oldestLoose {
-            letGo(oldest.id)
-        }
+        scroll[side] = 0
+        letGoOverflow(on: side, sparing: [item.id])
         save()
         if !quietly { play("Tink", volume: 0.35) }
         return item.id
+    }
+
+    /// From a photo's menu: over to the other line. The app flies it across.
+    var onMoveAcross: ((UUID, LineSide) -> Void)?
+
+    func moveAcross(_ id: UUID, to side: LineSide) {
+        if let onMoveAcross { onMoveAcross(id, side) } else { move(id, to: side) }
+    }
+
+    /// About to fly to its place, from where it was dropped: the card waits hidden.
+    func setFlying(_ id: UUID) {
+        guard let i = items.firstIndex(where: { $0.id == id }) else { return }
+        items[i].flying = true
     }
 
     /// The capture has reached the line: the real card takes over.
@@ -164,9 +292,10 @@ final class Line: ObservableObject {
         takeDown(items.filter { !$0.falling && !$0.kept && !$0.held })
     }
 
-    /// The photos hung before (left) or after (right) this one.
+    /// The photos hung before (left) or after (right) this one, on its own line.
     func neighbours(of id: UUID, toTheLeft: Bool) -> [Pegged] {
-        let live = items.filter { !$0.falling }
+        guard let side = items.first(where: { $0.id == id })?.side else { return [] }
+        let live = items.filter { !$0.falling && $0.side == side }
         guard let i = live.firstIndex(where: { $0.id == id }) else { return [] }
         return (toTheLeft ? Array(live[..<i]) : Array(live[(i + 1)...])).filter { !$0.kept && !$0.held }
     }
@@ -255,7 +384,7 @@ final class Line: ObservableObject {
             if soundOn && !quietly { Line.trashSound?.play() }
             drop(id, quietly: true)
             if let step, let index {
-                remember(TakenDown(url: item.url, index: index, trashed: trashed as URL?, kept: item.kept, byHand: item.byHand), in: step)
+                remember(TakenDown(url: item.url, index: index, trashed: trashed as URL?, kept: item.kept, byHand: item.byHand, side: item.side), in: step)
             }
             return true
         } catch {
@@ -305,31 +434,28 @@ final class Line: ObservableObject {
             trash(id, quietly: quietly, step: step)
         } else if let item = items.first(where: { $0.id == id && !$0.falling }), let index = liveIndex(of: id) {
             drop(id, quietly: quietly)
-            remember(TakenDown(url: item.url, index: index, trashed: nil, kept: item.kept, byHand: item.byHand), in: step)
+            remember(TakenDown(url: item.url, index: index, trashed: nil, kept: item.kept, byHand: item.byHand, side: item.side), in: step)
         }
     }
 
     /// Moves along a line that holds more than fit, from a scroll gesture.
-    func scroll(by delta: CGFloat) {
-        let most = CGFloat(max(0, items.count - visibleCount)) * Layout.spacing
-        let next = min(most, max(0, scroll + delta))
-        if next != scroll { scroll = next }
+    func scroll(by delta: CGFloat, on side: LineSide) {
+        let most = CGFloat(max(0, items(on: side).count - visible(on: side))) * Layout.spacing
+        let next = min(most, max(0, scroll(on: side) + delta))
+        if next != scroll(on: side) { scroll[side] = next }
     }
 
     /// After Keep on line is lowered, the oldest photos past it go the way
     /// of a full line.
     func trim() {
-        while liveCount > maxItems, let oldest = oldestLoose {
-            letGo(oldest.id)
-        }
-        scroll = 0
+        for side in LineSide.allCases { letGoOverflow(on: side) }
+        scroll = [:]
     }
 
-    /// The oldest photo falling off a full line. Like the cross, a file from
-    /// Perch's folder goes to the Trash, or nothing would ever take it out
-    /// of that folder. If the Trash refuses it, it still leaves the line.
+    /// The oldest photo falling off a full line. It only leaves the line: the
+    /// file stays in its folder, with the rest, to clear out when you like.
+    /// Discarding it is what the cross is for.
     private func letGo(_ id: UUID) {
-        if isInInbox(id), trash(id, quietly: true, step: nil) { return }
         drop(id, quietly: true)
     }
 
@@ -380,7 +506,8 @@ final class Line: ObservableObject {
 
     /// Quick Look on this photo, with the rest of the line a key press away.
     func quickLook(_ id: UUID) {
-        let live = items.filter { !$0.falling }
+        guard let side = items.first(where: { $0.id == id })?.side else { return }
+        let live = items.filter { !$0.falling && $0.side == side }
         guard let index = live.firstIndex(where: { $0.id == id }) else { return }
         QuickLook.shared.show(live.map(\.url), at: index)
     }
@@ -407,6 +534,7 @@ final class Line: ObservableObject {
         let trashed: URL?
         var kept = false
         var byHand = false
+        var side: LineSide = .right
     }
 
     /// What was taken down, the latest last. A step holds everything one
@@ -437,12 +565,15 @@ final class Line: ObservableObject {
             var item = Pegged(url: url, thumb: thumb)
             item.kept = photo.kept
             item.byHand = photo.byHand
-            let live = items.filter { !$0.falling }
+            item.side = photo.side
+            let live = items.filter { !$0.falling && $0.side == photo.side }
             if let gap = items.firstIndex(where: { $0.falling && $0.url == photo.url }) {
                 // Its empty place is still on the line: it hangs back there.
                 items[gap] = item
             } else if photo.index < live.count, let i = items.firstIndex(where: { $0.id == live[photo.index].id }) {
                 items.insert(item, at: i)
+            } else if let after = items.lastIndex(where: { $0.side == photo.side }) {
+                items.insert(item, at: after + 1)
             } else {
                 items.append(item)
             }
@@ -454,9 +585,7 @@ final class Line: ObservableObject {
         }
         // As when something new hangs, a full line lets its oldest photo go,
         // never one that just came back.
-        while liveCount > maxItems, let oldest = items.first(where: { !$0.falling && !$0.kept && !back.contains($0.id) }) {
-            letGo(oldest.id)
-        }
+        for side in LineSide.allCases { letGoOverflow(on: side, sparing: back) }
         keepKeptFirst()
         save()
         play("Tink", volume: 0.35)
@@ -480,28 +609,31 @@ final class Line: ObservableObject {
         }
     }
 
-    /// Where a photo hangs, counting only the photos still on the line.
+    /// Where a photo hangs, counting only the photos still on its line.
     private func liveIndex(of id: UUID) -> Int? {
-        items.filter { !$0.falling }.firstIndex { $0.id == id }
+        guard let side = items.first(where: { $0.id == id })?.side else { return nil }
+        return items.filter { !$0.falling && $0.side == side }.firstIndex { $0.id == id }
     }
 
     // MARK: Hanging by hand
 
-    /// Kept photos hang left of the knot, the rest after it, each side in
-    /// its own order.
+    /// On each line, kept photos hang left of the knot, the rest after it,
+    /// each in its own order.
     private func keepKeptFirst() {
-        let kept = items.filter { $0.kept && !$0.falling }
-        if items.prefix(kept.count).map(\.id) != kept.map(\.id) {
-            items = kept + items.filter { !($0.kept && !$0.falling) }
+        let pinned = { (p: Pegged) in p.kept && !p.falling }
+        var ordered: [Pegged] = []
+        for side in LineSide.allCases {
+            let mine = items.filter { $0.side == side }
+            ordered += mine.filter(pinned) + mine.filter { !pinned($0) }
         }
+        if ordered.map(\.id) != items.map(\.id) { items = ordered }
     }
 
-    /// Pin: the photo joins the kept ones at the left end of the line.
+    /// Pin: the photo joins the kept ones at the left end of its line.
     func pin(_ id: UUID) {
         guard let i = items.firstIndex(where: { $0.id == id && !$0.falling && !$0.kept }) else { return }
-        var item = items.remove(at: i)
-        item.kept = true
-        items.insert(item, at: keptCount)
+        items[i].kept = true
+        keepKeptFirst()
         save()
         play("Tink", volume: 0.35)
     }
@@ -512,7 +644,11 @@ final class Line: ObservableObject {
         guard let i = items.firstIndex(where: { $0.id == id && !$0.falling && $0.kept && !$0.byHand }) else { return }
         var item = items.remove(at: i)
         item.kept = false
-        items.insert(item, at: keptCount)
+        let side = item.side
+        let at = items.firstIndex { $0.side == side && !($0.kept && !$0.falling) }
+            ?? (items.lastIndex { $0.side == side }.map { $0 + 1 } ?? items.count)
+        items.insert(item, at: at)
+        keepKeptFirst()
         save()
     }
 
@@ -527,12 +663,11 @@ final class Line: ObservableObject {
             pin(hanging.id)
             return true
         }
-        guard let id = hang(url),
+        guard let id = hang(url, on: target),
               let i = items.firstIndex(where: { $0.id == id }) else { return false }
-        var item = items.remove(at: i)
-        item.kept = true
-        item.byHand = true
-        items.insert(item, at: keptCount)
+        items[i].kept = true
+        items[i].byHand = true
+        keepKeptFirst()
         save()
         return true
     }
@@ -562,12 +697,14 @@ final class Line: ObservableObject {
 
     private let keptKey = "kept"
     private let byHandKey = "byHand"
+    private let leftKey = "peggedLeft"
 
     private func save() {
         let live = items.filter { !$0.falling }
         UserDefaults.standard.set(live.map(\.url.path), forKey: storeKey)
         UserDefaults.standard.set(live.filter(\.kept).map(\.url.path), forKey: keptKey)
         UserDefaults.standard.set(live.filter(\.byHand).map(\.url.path), forKey: byHandKey)
+        UserDefaults.standard.set(live.filter { $0.side == .left }.map(\.url.path), forKey: leftKey)
     }
 
     /// Everything comes back as it was. This runs before the line knows its
@@ -577,12 +714,14 @@ final class Line: ObservableObject {
         let paths = UserDefaults.standard.stringArray(forKey: storeKey) ?? []
         let kept = Set(UserDefaults.standard.stringArray(forKey: keptKey) ?? [])
         let byHand = Set(UserDefaults.standard.stringArray(forKey: byHandKey) ?? [])
+        let left = Set(UserDefaults.standard.stringArray(forKey: leftKey) ?? [])
         for path in paths where FileManager.default.fileExists(atPath: path) {
             let url = URL(fileURLWithPath: path)
             guard !items.contains(where: { $0.url == url }), let thumb = makeThumbnail(url) else { continue }
             var item = Pegged(url: url, thumb: thumb)
             item.byHand = byHand.contains(path)
             item.kept = kept.contains(path) || item.byHand
+            item.side = left.contains(path) ? .left : .right
             items.append(item)
         }
         keepKeptFirst()

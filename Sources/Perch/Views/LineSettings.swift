@@ -28,6 +28,39 @@ struct LinePane: View {
             }
 
             if let line {
+                Section {
+                    Picker(tr("新截图挂到", "New screenshots hang on"), selection: binding(line, \.targetSide)) {
+                        Text(tr("左边 ·「\(line.name(of: .left))」", "Left · \(line.name(of: .left))")).tag(LineSide.left)
+                        Text(tr("右边 ·「\(line.name(of: .right))」", "Right · \(line.name(of: .right))")).tag(LineSide.right)
+                    }
+                    LabeledContent {
+                        HStack(spacing: 8) {
+                            Button(tr("选择…", "Choose…")) {
+                                line.chooseLeftFolder()
+                                revision += 1
+                            }
+                            Button(tr("打开", "Open")) { line.revealLeftFolder() }
+                        }
+                    } label: {
+                        SettingLabel(tr("左边那段的文件夹", "Left line's folder"),
+                                     (line.leftFolder.path as NSString).abbreviatingWithTildeInPath)
+                    }
+                    LabeledContent {
+                        Button(tr("打开", "Open")) { line.openScreenshotsFolder() }
+                    } label: {
+                        SettingLabel(tr("右边那段：截图文件夹", "Right line: the screenshots folder"),
+                                     tr("随手截的图放这里，点 ✕ 直接进废纸篓，方便统一清理。",
+                                        "For screenshots you need for a moment: the cross sends them to the Trash, so they are easy to clear out."))
+                    }
+                } header: {
+                    Text(tr("两段绳，两个文件夹", "Two lines, two folders"))
+                } footer: {
+                    Text(tr("左边那段收你想留下的，比如听课时截的笔记：截图直接存进你选的文件夹，从绳上取下时文件还在。点绳中间的标签也能切换挂到哪边；右键照片可以挪到另一段。一段挂满后，最早的一张从绳上落下，文件仍留在原来的文件夹里。",
+                            "The left line keeps what you want to keep, like notes from a class: screenshots go straight into the folder you choose, and stay there when you take them off the line. Click a label between the lines to switch sides; right-click a photo to move it to the other line. When a line is full, its oldest photo falls off the line, and its file stays in its folder."))
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+
                 Section(tr("截图", "Screenshots")) {
                     Toggle(isOn: binding(line, \.handlesScreenshots)) {
                         SettingLabel(tr("接管截图", "Handle screenshots"),
@@ -54,17 +87,28 @@ struct LinePane: View {
                             }
                         }
                     }
-                    Button(tr("打开截图文件夹", "Open Screenshots Folder")) { line.openScreenshotsFolder() }
                 }
 
                 Section(tr("放下晾衣绳", "Bring the line down")) {
                     Toggle(isOn: staticBinding(get: { LineController.opensFromMenuBar }, set: { LineController.opensFromMenuBar = $0 })) {
                         SettingLabel(tr("指针停在菜单栏中间时", "When the pointer rests in the middle of the menu bar"),
-                                     tr("菜单栏中间三分之一，灵动岛两侧；停在灵动岛上会展开灵动岛。快捷键在「通用」里。",
-                                        "The middle third, either side of the island; resting on the island opens the island. The shortcut is in General."))
+                                     tr("菜单栏中间一半，灵动岛两侧；停在灵动岛上会展开灵动岛。快捷键在「通用」里。",
+                                        "The middle half, either side of the island; resting on the island opens the island. The shortcut is in General."))
                     }
                     Toggle(tr("有新截图挂上时", "When something new hangs"),
                            isOn: staticBinding(get: { LineController.peeksAtNew }, set: { LineController.peeksAtNew = $0 }))
+                    Picker(selection: Binding(get: { LineController.staysDown }, set: {
+                        LineController.staysDown = $0
+                        revision += 1
+                    })) {
+                        ForEach(LineController.stayChoices, id: \.self) { seconds in
+                            Text(tr("\(Int(seconds)) 秒", "\(Int(seconds)) seconds")).tag(seconds)
+                        }
+                    } label: {
+                        SettingLabel(tr("自己放下后停留", "Stays down by itself for"),
+                                     tr("新截图挂上后晾衣绳停留多久再收起；指针移上去时会一直等你。",
+                                        "How long the line stays down after something new hangs; it waits while the pointer is on it."))
+                    }
                     Toggle(isOn: binding(line, \.showsOverFullScreen)) {
                         SettingLabel(tr("在全屏 App 上", "Over full screen apps"),
                                      tr("关掉后，全屏看视频、放幻灯片时晾衣绳不会自己放下，只能用快捷键或菜单打开。",
@@ -83,6 +127,11 @@ struct LinePane: View {
                         ForEach(LineController.keepChoices, id: \.self) { n in
                             Text(tr("\(n) 张", "\(n) photos")).tag(Int?.some(n))
                         }
+                    }
+                    Toggle(isOn: staticBinding(get: { LineController.birdsEnabled }, set: { LineController.birdsEnabled = $0 })) {
+                        SettingLabel(tr("小鸟", "Birds"),
+                                     tr("晾衣绳放下时，偶尔有麻雀、山雀、燕子飞来落一会儿，收起时飞走；指针靠近也会惊飞。开了「减弱动态效果」时不出现。",
+                                        "While the line is down, sparrows, tits and swallows sometimes come to sit on it, and fly off as it goes up or the pointer comes close. Not with Reduce Motion on."))
                     }
                     Toggle(tr("声音", "Sounds"), isOn: binding(line, \.playsSounds))
                 }

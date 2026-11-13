@@ -24,8 +24,9 @@ enum Layout {
     static var photoMaxHeight: CGFloat { (104 * size.scale).rounded() }
     static var cardWidth: CGFloat { (150 * size.scale).rounded() }
     static var spacing: CGFloat { cardWidth + 24 }
-    static var panelHeight: CGFloat { photoMaxHeight + 106 }
-    static let ropeTop: CGFloat = 10
+    /// Room above the rope for the birds that come to sit on it.
+    static var panelHeight: CGFloat { photoMaxHeight + 114 }
+    static let ropeTop: CGFloat = 18
     static let pinAbove: CGFloat = 9.5
 
     /// The rope hangs as a parabola from edge to edge of the screen.
@@ -34,19 +35,27 @@ enum Layout {
     // MARK: Two lines either side of the middle
 
     /// The stretch left empty in the middle, in the panel's coordinates: there the island and the
-    /// task capsule hang from the notch. The line becomes two, one on each side, each with its own
-    /// sag and its own places; nil keeps one line from edge to edge.
+    /// task capsule hang from the notch. Nil on a screen without them.
     static var gap: ClosedRange<CGFloat>?
 
-    /// The lengths of line photos hang on.
+    /// The two lengths of line, left and right of the middle, each with its own photos, sag and
+    /// places. Without the island they still part in the middle, a little apart.
     static func segments(width: CGFloat) -> [ClosedRange<CGFloat>] {
-        guard let gap, gap.lowerBound > cardWidth, gap.upperBound < width - cardWidth else { return [0...width] }
-        return [0...gap.lowerBound, gap.upperBound...width]
+        if let gap, gap.lowerBound > cardWidth, gap.upperBound < width - cardWidth {
+            return [0...gap.lowerBound, gap.upperBound...width]
+        }
+        let half = min(110, width / 6)
+        return [0...(width / 2 - half), (width / 2 + half)...width]
     }
 
-    private static func segment(at x: CGFloat, width: CGFloat) -> ClosedRange<CGFloat> {
+    static func segment(_ side: LineSide, width: CGFloat) -> ClosedRange<CGFloat> {
+        segments(width: width)[side == .left ? 0 : 1]
+    }
+
+    /// The line a point across the screen belongs to.
+    static func side(at x: CGFloat, width: CGFloat) -> LineSide {
         let all = segments(width: width)
-        return all.count == 2 && x > (all[0].upperBound + all[1].lowerBound) / 2 ? all[1] : all[0]
+        return x > (all[0].upperBound + all[1].lowerBound) / 2 ? .right : .left
     }
 
     /// How many photos hang `spacing` apart on one length, clear of both its ends.
@@ -54,31 +63,18 @@ enum Layout {
         max(1, Int((segment.upperBound - segment.lowerBound - 40) / spacing))
     }
 
-    /// The resting places of a full split line, left to right.
-    static func placeCenters(width: CGFloat) -> [CGFloat] {
-        segments(width: width).flatMap { segment -> [CGFloat] in
-            let n = places(in: segment)
-            let mid = (segment.lowerBound + segment.upperBound) / 2
-            return (0..<n).map { mid + (CGFloat($0) - CGFloat(n - 1) / 2) * spacing }
-        }
+    /// The resting places of a full line, left to right.
+    static func placeCenters(_ side: LineSide, width: CGFloat) -> [CGFloat] {
+        let segment = segment(side, width: width)
+        let n = places(in: segment)
+        let mid = (segment.lowerBound + segment.upperBound) / 2
+        return (0..<n).map { mid + (CGFloat($0) - CGFloat(n - 1) / 2) * spacing }
     }
 
-    /// A position along the places, fractional while a photo scrolls from one to the next: across
-    /// the middle it moves straight over to the other side. Past either end it keeps the spacing.
-    static func placeX(_ s: CGFloat, width: CGFloat) -> CGFloat {
-        let centers = placeCenters(width: width)
-        let last = CGFloat(centers.count - 1)
-        if s <= 0 { return centers[0] + s * spacing }
-        if s >= last { return centers[centers.count - 1] + (s - last) * spacing }
-        let i = Int(s.rounded(.down))
-        return centers[i] + (centers[i + 1] - centers[i]) * (s - CGFloat(i))
-    }
-
-    /// How far a photo is from where it would start to slip out of sight: the screen's edges, and
-    /// on a split line the island in the middle.
+    /// How far a photo is from where it would start to slip out of sight: the ends of its line,
+    /// the screen's edge on one side and the island on the other.
     static func edgeDistance(_ x: CGFloat, width: CGFloat) -> CGFloat {
         let all = segments(width: width)
-        guard all.count == 2 else { return min(x, width - x) }
         if x <= all[0].upperBound { return min(x, all[0].upperBound - x) }
         if x >= all[1].lowerBound { return min(x - all[1].lowerBound, width - x) }
         return 0
@@ -88,80 +84,52 @@ enum Layout {
         pinned > 0 && pinned < visible - 1
     }
 
-    /// On a line that scrolls with pinned photos anchored, where the photos
-    /// scrolling behind them should have faded out. Nil otherwise.
-    static func pinnedEdge(count: Int, width: CGFloat, visible: Int, pinned: Int) -> CGFloat? {
-        guard Line.keepOnLine != nil, count > visible, anchorsPinned(pinned, visible: visible) else { return nil }
-        if segments(width: width).count == 2 { return placeX(CGFloat(pinned - 1), width: width) }
-        let newest = width / 2 + CGFloat(visible - 1) * spacing / 2
-        return newest - CGFloat(visible - pinned) * spacing
+    /// On a line that scrolls with pinned photos anchored, where the last
+    /// pinned one rests. Nil otherwise.
+    static func pinnedEdge(count: Int, side: LineSide, width: CGFloat, pinned: Int) -> CGFloat? {
+        let centers = placeCenters(side, width: width)
+        guard Line.keepOnLine != nil, count > centers.count, anchorsPinned(pinned, visible: centers.count) else { return nil }
+        return centers[pinned - 1]
     }
 
     static func ropeY(x: CGFloat, width: CGFloat) -> CGFloat {
         guard width > 0 else { return ropeTop }
-        let segment = segment(at: x, width: width)
+        let segment = segment(side(at: x, width: width), width: width)
         let length = segment.upperBound - segment.lowerBound
         let f = min(max((x - segment.lowerBound) / length, 0), 1)
         return ropeTop + 4 * sag(width: length) * f * (1 - f)
     }
 
-    /// Photos hang `spacing` apart, centred. When there are more than the
-    /// `visible` that fit: with Keep on line set, they keep their spacing,
-    /// the newest stays where the last one would hang on a full line, and
-    /// `scroll` brings older ones in from the left. Otherwise (a line hung
-    /// on a wider screen) they move closer together so none is past the edge.
+    /// The rope as drawn, a little past both ends of its line: where a bird's feet go.
+    static func ropeCurveY(x: CGFloat, width: CGFloat) -> CGFloat {
+        let segment = segment(side(at: x, width: width), width: width)
+        let length = segment.upperBound - segment.lowerBound
+        let u = min(max((x - segment.lowerBound + 20) / (length + 40), 0), 1)
+        return ropeTop + 4 * sag(width: length) * u * (1 - u)
+    }
+
+    /// Where a photo hangs on its line, `spacing` apart and centred. When
+    /// there are more than fit: with Keep on line set, they keep their
+    /// spacing, the newest stays in the last place and `scroll` brings older
+    /// ones in from the left. Otherwise (a line hung on a wider screen) they
+    /// move closer together so none is past the end.
     ///
     /// The first `pinned` photos are the pinned ones. On a line that
     /// scrolls they stay put at its left end, and the rest scroll behind
     /// them, unless they would leave almost no room for the rest.
-    static func x(index: Int, count: Int, width: CGFloat, visible: Int, scroll: CGFloat,
-                  pinned: Int = 0) -> CGFloat {
-        let segments = segments(width: width)
-        if segments.count == 2 {
-            return splitX(index: index, count: count, width: width, segments: segments, scroll: scroll, pinned: pinned)
-        }
+    static func x(index: Int, count: Int, side: LineSide, width: CGFloat, scroll: CGFloat, pinned: Int = 0) -> CGFloat {
+        let segment = segment(side, width: width)
+        let centers = placeCenters(side, width: width)
+        let visible = centers.count
         if Line.keepOnLine != nil && count > visible {
-            let newest = width / 2 + CGFloat(visible - 1) * spacing / 2
-            if anchorsPinned(pinned, visible: visible), index < pinned {
-                return newest - CGFloat(visible - 1 - index) * spacing
-            }
-            return newest - CGFloat(count - 1 - index) * spacing + scroll
+            if anchorsPinned(pinned, visible: visible), index < pinned { return centers[index] }
+            let place = CGFloat(visible - 1 - (count - 1 - index)) + scroll / spacing
+            return centers[0] + place * spacing
         }
         let gaps = CGFloat(max(count - 1, 0))
-        let step = gaps > 0 ? min(spacing, max(0, width - 200) / gaps) : spacing
-        return width / 2 - gaps * step / 2 + CGFloat(index) * step
-    }
-
-    /// The same on a split line. Scrolling, photos move along the places, through the middle from
-    /// one side to the other. Otherwise the older half hangs on the left and the newer on the
-    /// right, each centred on its side, closer together when there are more than fit.
-    private static func splitX(index: Int, count: Int, width: CGFloat, segments: [ClosedRange<CGFloat>],
-                               scroll: CGFloat, pinned: Int) -> CGFloat {
-        let left = segments[0], right = segments[1]
-        let leftPlaces = places(in: left), rightPlaces = places(in: right)
-        let visible = leftPlaces + rightPlaces
-        if Line.keepOnLine != nil && count > visible {
-            if anchorsPinned(pinned, visible: visible), index < pinned {
-                return placeX(CGFloat(index), width: width)
-            }
-            return placeX(CGFloat(visible - 1 - (count - 1 - index)) + scroll / spacing, width: width)
-        }
-        var onRight = count / 2
-        var onLeft = count - onRight
-        if count <= visible {
-            if onLeft > leftPlaces {
-                onLeft = leftPlaces
-                onRight = count - onLeft
-            } else if onRight > rightPlaces {
-                onRight = rightPlaces
-                onLeft = count - onRight
-            }
-        }
-        let (segment, i, n) = index < onLeft ? (left, index, onLeft) : (right, index - onLeft, onRight)
-        let gaps = CGFloat(max(n - 1, 0))
         let room = segment.upperBound - segment.lowerBound - cardWidth - 40
         let step = gaps > 0 ? min(spacing, max(0, room) / gaps) : spacing
-        return (segment.lowerBound + segment.upperBound) / 2 - gaps * step / 2 + CGFloat(i) * step
+        return (segment.lowerBound + segment.upperBound) / 2 - gaps * step / 2 + CGFloat(index) * step
     }
 }
 
@@ -172,107 +140,220 @@ struct LineView: View {
         GeometryReader { geo in
             let width = geo.size.width
             ZStack(alignment: .topLeading) {
-                ForEach(Layout.segments(width: width), id: \.lowerBound) { segment in
-                    Rope(width: segment.upperBound - segment.lowerBound)
-                        .frame(width: segment.upperBound - segment.lowerBound, height: Layout.panelHeight, alignment: .topLeading)
-                        .offset(x: segment.lowerBound)
-                }
+                lines(width: width)
+                    // Tucked away, the whole line waits above the top edge and slides
+                    // out from under the menu bar, the way an auto-hiding Dock does.
+                    .offset(y: line.revealed ? 0 : -(Layout.panelHeight + 12))
+                    .animation(line.revealed ? .spring(response: 0.42, dampingFraction: 0.82)
+                                             : .easeIn(duration: 0.22), value: line.revealed)
+            }
+        }
+        .onPreferenceChange(HitRectsKey.self) { rects in
+            line.hitRects = rects
+        }
+        .onPreferenceChange(LabelRectsKey.self) { rects in
+            line.labelRects = rects
+        }
+    }
 
-                if line.items.isEmpty {
-                    let hintX = Layout.segments(width: width).count == 2
-                        ? (Layout.segments(width: width)[0].lowerBound + Layout.segments(width: width)[0].upperBound) / 2
-                        : width / 2
-                    Hint()
-                        .position(x: hintX, y: Layout.ropeY(x: hintX, width: width) + 34)
-                        .transition(.opacity)
-                }
+    private func lines(width: CGFloat) -> some View {
+        ZStack(alignment: .topLeading) {
+            ForEach(LineSide.allCases, id: \.self) { side in
+                let segment = Layout.segment(side, width: width)
+                Rope(width: segment.upperBound - segment.lowerBound, start: segment.lowerBound,
+                     flock: line.flock, lit: line.dropSide == side)
+                    .frame(width: segment.upperBound - segment.lowerBound, height: Layout.panelHeight, alignment: .topLeading)
+                    .offset(x: segment.lowerBound)
+            }
 
-                if let x = knotX(width: width) {
+            labels(width: width)
+
+            if line.items.isEmpty {
+                let segment = Layout.segment(line.target, width: width)
+                let hintX = (segment.lowerBound + segment.upperBound) / 2
+                Hint()
+                    .position(x: hintX, y: Layout.ropeY(x: hintX, width: width) + 34)
+                    .transition(.opacity)
+            }
+
+            ForEach(LineSide.allCases, id: \.self) { side in
+                if let x = knotX(side, width: width) {
                     Knot()
                         .position(x: x, y: Layout.ropeY(x: x, width: width) + 0.5)
                         .transition(.opacity)
                 }
-
-                ForEach(Array(line.items.enumerated()), id: \.element.id) { index, item in
-                    let x = Layout.x(index: index, count: line.items.count, width: width,
-                                     visible: line.visibleCount, scroll: line.scroll, pinned: line.pinnedLead)
-                    // On a line that scrolls, a photo reaching the edge of the
-                    // screen, or the knot it slips behind, dims and stops taking
-                    // clicks as soon as it starts to.
-                    let bounds = index >= line.pinnedLead ? scrollBounds(width: width) : nil
-                    let cardLeft = x - Layout.cardWidth / 2, cardRight = x + Layout.cardWidth / 2
-                    let out = bounds.map { cardLeft < $0.lowerBound || cardRight > $0.upperBound } == true
-                    // On the left it fades gradually: whole in the first place,
-                    // gone once halfway behind the limit.
-                    let fadeIn = bounds.map { bounds -> CGFloat in
-                        let gone = bounds.lowerBound - Layout.cardWidth / 2
-                        let rest = firstLooseX(width: width) - Layout.cardWidth / 2
-                        return min(1, max(0, (cardLeft - gone) / max(1, rest - gone)))
-                    } ?? 1
-                    let ropeY = Layout.ropeY(x: x, width: width)
-                    PeggedView(item: item, line: line)
-                        .frame(width: Layout.cardWidth, height: Layout.panelHeight - ropeY, alignment: .top)
-                        // Photos scrolled towards an edge fade out before they reach it.
-                        .opacity(min(1, max(0, Layout.edgeDistance(x, width: width) / 90)) * fadeIn
-                                 * (bounds.map { cardRight > $0.upperBound } == true ? 0.35 : 1))
-                        .animation(.easeOut(duration: 0.2), value: out)
-                        .allowsHitTesting(!out)
-                        .zIndex(index < line.pinnedLead ? 1 : 0)
-                        .position(x: x, y: ropeY - Layout.pinAbove + (Layout.panelHeight - ropeY) / 2)
-                }
             }
-            .animation(.spring(response: 0.55, dampingFraction: 0.78), value: line.items.map(\.id))
-            .animation(.easeInOut(duration: 0.3), value: line.items.isEmpty)
-            .animation(.spring(response: 0.55, dampingFraction: 0.78), value: line.items.map(\.kept))
-            // Tucked away, the whole line waits above the top edge and slides
-            // out from under the menu bar, the way an auto-hiding Dock does.
-            .offset(y: line.revealed ? 0 : -(Layout.panelHeight + 12))
-            .animation(line.revealed ? .spring(response: 0.42, dampingFraction: 0.82)
-                                     : .easeIn(duration: 0.22), value: line.revealed)
+
+            ForEach(line.items) { item in
+                card(item, width: width)
+            }
         }
-        .onPreferenceChange(HitRectsKey.self) { rects in
-            line.hitRects = rects
+        .animation(.spring(response: 0.55, dampingFraction: 0.78), value: line.items.map(\.id))
+        .animation(.spring(response: 0.55, dampingFraction: 0.78), value: line.items.map(\.side))
+        .animation(.easeInOut(duration: 0.3), value: line.items.isEmpty)
+        .animation(.spring(response: 0.55, dampingFraction: 0.78), value: line.items.map(\.kept))
+    }
+
+    private func card(_ item: Pegged, width: CGFloat) -> some View {
+        let side = item.side
+        let mine = line.items(on: side)
+        let index = mine.firstIndex { $0.id == item.id } ?? 0
+        let pinned = line.pinnedLead(on: side)
+        let x = Layout.x(index: index, count: mine.count, side: side, width: width,
+                         scroll: line.scroll(on: side), pinned: pinned)
+        // On a line that scrolls, a photo reaching the end of its line, or
+        // the knot it slips behind, dims and stops taking clicks as soon as it starts to.
+        let bounds = index >= pinned ? scrollBounds(side, width: width) : nil
+        let cardLeft = x - Layout.cardWidth / 2, cardRight = x + Layout.cardWidth / 2
+        let out = bounds.map { cardLeft < $0.lowerBound || cardRight > $0.upperBound } == true
+        // On the left it fades gradually: whole in the first place,
+        // gone once halfway behind the limit.
+        let fadeIn = bounds.map { bounds -> CGFloat in
+            let gone = bounds.lowerBound - Layout.cardWidth / 2
+            let rest = firstLooseX(side, width: width) - Layout.cardWidth / 2
+            return min(1, max(0, (cardLeft - gone) / max(1, rest - gone)))
+        } ?? 1
+        let ropeY = Layout.ropeY(x: x, width: width)
+        return PeggedView(item: item, line: line)
+            .frame(width: Layout.cardWidth, height: Layout.panelHeight - ropeY, alignment: .top)
+            // Photos scrolled towards an end fade out before they reach it.
+            .opacity(min(1, max(0, Layout.edgeDistance(x, width: width) / 90)) * fadeIn
+                     * (bounds.map { cardRight > $0.upperBound } == true ? 0.35 : 1))
+            .animation(.easeOut(duration: 0.2), value: out)
+            .allowsHitTesting(!out)
+            .zIndex(index < pinned ? 1 : 0)
+            .position(x: x, y: ropeY - Layout.pinAbove + (Layout.panelHeight - ropeY) / 2)
+    }
+
+    /// The two labels at the inner ends of the lines, just clear of the island and the capsule:
+    /// which folder each line keeps, and which one new screenshots hang on. Small, a dot and an
+    /// icon, until the pointer comes to one; a click switches.
+    private func labels(width: CGFloat) -> some View {
+        let left = Layout.segment(.left, width: width), right = Layout.segment(.right, width: width)
+        let room: CGFloat = 170
+        return ZStack(alignment: .topLeading) {
+            ForEach(LineSide.allCases, id: \.self) { side in
+                let inner = side == .left ? left.upperBound - 6 : right.lowerBound + 6
+                SideLabel(side: side, name: Line.name(of: side), active: line.target == side,
+                          dropping: line.dropSide == side) {
+                    guard line.target != side else { return }
+                    line.target = side
+                    if line.soundOn { NSSound(named: "Pop")?.play() }
+                }
+                .frame(width: room, height: 26, alignment: side == .left ? .trailing : .leading)
+                .position(x: side == .left ? inner - room / 2 : inner + room / 2,
+                          y: Layout.ropeCurveY(x: inner, width: width) + 1)
+            }
         }
     }
 
     /// Where the first photo past the pinned ones hangs at rest on a
     /// scrolling line: the first place, or the one just past the knot.
-    private func firstLooseX(width: CGFloat) -> CGFloat {
-        if Layout.segments(width: width).count == 2 {
-            let pinned = Layout.anchorsPinned(line.pinnedLead, visible: line.visibleCount) ? line.pinnedLead : 0
-            return Layout.placeX(CGFloat(pinned), width: width)
-        }
-        let newest = width / 2 + CGFloat(line.visibleCount - 1) * Layout.spacing / 2
-        let first = newest - CGFloat(line.visibleCount - 1) * Layout.spacing
-        let pinned = Layout.anchorsPinned(line.pinnedLead, visible: line.visibleCount) ? line.pinnedLead : 0
-        return first + CGFloat(pinned) * Layout.spacing
+    private func firstLooseX(_ side: LineSide, width: CGFloat) -> CGFloat {
+        let centers = Layout.placeCenters(side, width: width)
+        let lead = line.pinnedLead(on: side)
+        let pinned = Layout.anchorsPinned(lead, visible: centers.count) ? lead : 0
+        return centers[min(pinned, centers.count - 1)]
     }
 
     /// Where a photo on a scrolling line stops being whole in view: the
-    /// knot when pinned photos stay put, or else the left edge of the screen,
-    /// and the right edge. Nil on a line that does not scroll.
-    private func scrollBounds(width: CGFloat) -> ClosedRange<CGFloat>? {
-        guard Line.keepOnLine != nil, line.items.count > line.visibleCount else { return nil }
-        let pinnedStay = Layout.pinnedEdge(count: line.items.count, width: width,
-                                           visible: line.visibleCount, pinned: line.pinnedLead) != nil
-        let start = pinnedStay ? knotX(width: width) ?? 0 : 0
-        return start...width
+    /// knot when pinned photos stay put, or else the start of its line, and
+    /// its end. Nil on a line that does not scroll.
+    private func scrollBounds(_ side: LineSide, width: CGFloat) -> ClosedRange<CGFloat>? {
+        let count = line.items(on: side).count
+        guard Line.keepOnLine != nil, count > line.visible(on: side) else { return nil }
+        let segment = Layout.segment(side, width: width)
+        let pinnedStay = Layout.pinnedEdge(count: count, side: side, width: width, pinned: line.pinnedLead(on: side)) != nil
+        let start = pinnedStay ? knotX(side, width: width) ?? segment.lowerBound : segment.lowerBound
+        return start...segment.upperBound
     }
 
     /// Halfway between the last pinned photo and the next one, or half a
     /// step past it when nothing hangs loose. The empty place a pinned photo
     /// leaves still counts, so the knot stays put until the gaps close.
-    private func knotX(width: CGFloat) -> CGFloat? {
-        guard let last = line.items.lastIndex(where: \.kept) else { return nil }
-        let x = { (i: Int) in Layout.x(index: i, count: line.items.count, width: width,
-                                       visible: line.visibleCount, scroll: line.scroll, pinned: line.pinnedLead) }
+    private func knotX(_ side: LineSide, width: CGFloat) -> CGFloat? {
+        let mine = line.items(on: side)
+        guard let last = mine.lastIndex(where: \.kept) else { return nil }
+        let pinned = line.pinnedLead(on: side)
+        let x = { (i: Int) in Layout.x(index: i, count: mine.count, side: side, width: width,
+                                       scroll: line.scroll(on: side), pinned: pinned) }
         // On a line that scrolls, the pinned photos stay put, and the knot with them.
-        if Layout.pinnedEdge(count: line.items.count, width: width,
-                             visible: line.visibleCount, pinned: line.pinnedLead) != nil {
+        if Layout.pinnedEdge(count: mine.count, side: side, width: width, pinned: pinned) != nil {
             return x(last) + Layout.spacing / 2
         }
-        let next = last + 1 < line.items.count ? x(last + 1) : x(last) + Layout.spacing
+        let next = last + 1 < mine.count ? x(last + 1) : x(last) + Layout.spacing
         return (x(last) + next) / 2
+    }
+}
+
+/// A line's label: the folder it keeps its photos in. Small until the pointer comes to it, or a
+/// photo is dragged over its line; the one new screenshots hang on has a lit dot.
+private struct SideLabel: View {
+    let side: LineSide
+    let name: String
+    let active: Bool
+    let dropping: Bool
+    let action: () -> Void
+    @State private var hovering = false
+
+    private var open: Bool { hovering || dropping }
+    private static let green = Color(red: 0.42, green: 0.86, blue: 0.55)
+
+    var body: some View {
+        HStack(spacing: 4) {
+            if side == .right { mark }
+            if open {
+                Text(dropping ? String(format: L("Hang on “%@”"), name) : name)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .fixedSize()
+                    .transition(.opacity.combined(with: .scale(scale: 0.85, anchor: side == .left ? .trailing : .leading)))
+            }
+            if side == .left { mark }
+        }
+        .font(.system(size: 11, weight: .medium, design: .rounded))
+        .foregroundStyle(.white.opacity(active || open ? 0.95 : 0.6))
+        .padding(.horizontal, open ? 8 : 5)
+        .padding(.vertical, open ? 4 : 3)
+        .background(Capsule().fill(Color.black.opacity(open ? 0.55 : 0.34)))
+        .background(Capsule().fill(.ultraThinMaterial))
+        .overlay(Capsule().strokeBorder(Color.white.opacity(dropping ? 0.5 : open ? 0.22 : 0.1), lineWidth: dropping ? 1 : 0.5))
+        .opacity(active || open ? 1 : 0.75)
+        .animation(.spring(response: 0.32, dampingFraction: 0.8), value: open)
+        .animation(.easeOut(duration: 0.25), value: active)
+        .contentShape(Capsule())
+        .onHover { hovering = $0 }
+        .onTapGesture(perform: action)
+        .help(active ? L("New screenshots hang on this line") : L("Click to hang new screenshots on this line"))
+        .background(
+            GeometryReader { g in
+                Color.clear.preference(key: LabelRectsKey.self, value: [g.frame(in: .global)])
+            }
+        )
+    }
+
+    /// The dot, lit on the line new screenshots hang on, and the line's icon.
+    private var mark: some View {
+        HStack(spacing: 3) {
+            if side == .right { dot }
+            Image(systemName: side == .left ? "folder.fill" : "camera.viewfinder")
+                .font(.system(size: 9.5, weight: .semibold))
+            if side == .left { dot }
+        }
+    }
+
+    private var dot: some View {
+        Circle()
+            .fill(active ? Self.green : Color.white.opacity(0.35))
+            .frame(width: 5, height: 5)
+            .shadow(color: active ? Self.green.opacity(0.9) : .clear, radius: 2.5)
+    }
+}
+
+struct LabelRectsKey: PreferenceKey {
+    static var defaultValue: [CGRect] = []
+    static func reduce(value: inout [CGRect], nextValue: () -> [CGRect]) {
+        value += nextValue()
     }
 }
 
@@ -312,25 +393,46 @@ private struct Hint: View {
 
 /// A thin, neutral line: a mid gray core with a faint highlight and a soft
 /// shadow, so it reads on light and dark backgrounds alike. It fades out at
-/// both ends so it seems to come from beyond the screen.
+/// both ends so it seems to come from beyond the screen. Where a bird sits it
+/// gives a little, and bounces when one lands or takes off.
 struct Rope: View {
     let width: CGFloat
+    /// Where this length of line starts across the panel, to find the birds on it.
+    var start: CGFloat = 0
+    var flock: Flock?
+    /// A photo dragged over this line would hang on it.
+    var lit = false
 
-    private var path: Path {
-        Path { p in
-            let top = Layout.ropeTop
-            p.move(to: CGPoint(x: -20, y: top))
-            p.addQuadCurve(
-                to: CGPoint(x: width + 20, y: top),
-                control: CGPoint(x: width / 2, y: top + 2 * Layout.sag(width: width)))
+    private func path(at t: Double?) -> Path {
+        let top = Layout.ropeTop
+        let sag = Layout.sag(width: width)
+        guard let t, let flock, flock.weighs(between: start...(start + width), at: t) else {
+            return Path { p in
+                p.move(to: CGPoint(x: -20, y: top))
+                p.addQuadCurve(to: CGPoint(x: width + 20, y: top), control: CGPoint(x: width / 2, y: top + 2 * sag))
+            }
+        }
+        return Path { p in
+            let span = width + 40
+            var x: CGFloat = -20
+            p.move(to: CGPoint(x: x, y: top))
+            while x < width + 20 {
+                x = min(width + 20, x + 3)
+                let u = (x + 20) / span
+                p.addLine(to: CGPoint(x: x, y: top + 4 * sag * u * (1 - u) + flock.ropeDip(at: start + x, t: t)))
+            }
         }
     }
 
     var body: some View {
-        ZStack {
-            path.stroke(Color.black.opacity(0.22), lineWidth: 1.4).offset(y: 1.2).blur(radius: 1.2)
-            path.stroke(Color(white: 0.55), lineWidth: 1.2)
-            path.stroke(Color.white.opacity(0.45), lineWidth: 0.4).offset(y: -0.35)
+        Group {
+            if let flock, !flock.birds.isEmpty {
+                TimelineView(.animation(minimumInterval: 1.0 / 60)) { context in
+                    strokes(path(at: context.date.timeIntervalSinceReferenceDate))
+                }
+            } else {
+                strokes(path(at: nil))
+            }
         }
         .mask(
             LinearGradient(stops: [
@@ -341,6 +443,18 @@ struct Rope: View {
             ], startPoint: .leading, endPoint: .trailing)
         )
         .allowsHitTesting(false)
+    }
+
+    private func strokes(_ path: Path) -> some View {
+        ZStack {
+            path.stroke(Color.black.opacity(0.22), lineWidth: 1.4).offset(y: 1.2).blur(radius: 1.2)
+            path.stroke(Color(white: lit ? 0.85 : 0.55), lineWidth: lit ? 1.6 : 1.2)
+            path.stroke(Color.white.opacity(0.45), lineWidth: 0.4).offset(y: -0.35)
+            if lit {
+                path.stroke(Color.white.opacity(0.7), lineWidth: 3).blur(radius: 3)
+            }
+        }
+        .animation(.easeOut(duration: 0.2), value: lit)
     }
 }
 

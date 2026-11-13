@@ -50,3 +50,47 @@ final class LinePanel: NSPanel {
         if frame != target { setFrame(target, display: true) }
     }
 }
+
+/// Holds the line's view and takes one kind of drop: a photo dragged off one line onto the other,
+/// which moves it there, file and all. Everything else is left to whatever is underneath.
+final class LineDropView: NSView {
+    /// The line a photo dragged to this point (in window coordinates) would move to, if any.
+    var target: (NSPoint) -> LineSide? = { _ in nil }
+    var onHover: (LineSide?) -> Void = { _ in }
+    /// Dropped on the other line, at this point on the screen.
+    var onDrop: (LineSide, NSPoint) -> Bool = { _, _ in false }
+
+    init(content: NSView) {
+        super.init(frame: .zero)
+        content.autoresizingMask = [.width, .height]
+        addSubview(content)
+        registerForDraggedTypes([.fileURL])
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func resizeSubviews(withOldSize oldSize: NSSize) {
+        super.resizeSubviews(withOldSize: oldSize)
+        subviews.first?.frame = bounds
+    }
+
+    private func update(_ sender: NSDraggingInfo) -> NSDragOperation {
+        guard sender.draggingSource is GrabView, let side = target(sender.draggingLocation) else {
+            onHover(nil)
+            return []
+        }
+        onHover(side)
+        return .move
+    }
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation { update(sender) }
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation { update(sender) }
+    override func draggingExited(_ sender: NSDraggingInfo?) { onHover(nil) }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        defer { onHover(nil) }
+        guard sender.draggingSource is GrabView, let side = target(sender.draggingLocation),
+              let window else { return false }
+        return onDrop(side, window.convertPoint(toScreen: sender.draggingLocation))
+    }
+}

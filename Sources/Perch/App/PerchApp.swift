@@ -1,3 +1,4 @@
+import PerchLine
 import SwiftUI
 
 @main
@@ -31,6 +32,10 @@ private struct MenuBarContent: View {
         if let line = app.line {
             Menu(tr("晾衣绳", "Line")) {
                 Button(tr("显示 / 隐藏", "Show / Hide")) { line.toggleLine() }
+                Picker(tr("新截图挂到", "New Screenshots Hang On"), selection: Binding(get: { line.targetSide }, set: { line.targetSide = $0 })) {
+                    Text(tr("左边 ·「\(line.name(of: .left))」", "Left · \(line.name(of: .left))")).tag(LineSide.left)
+                    Text(tr("右边 ·「\(line.name(of: .right))」", "Right · \(line.name(of: .right))")).tag(LineSide.right)
+                }
                 Button(tr("全部取下", "Take Everything Down")) { line.takeEverythingDown() }
                     .disabled(line.isEmpty)
                 Button(tr("挂回刚取下的", "Put Back")) { line.putBackLast() }

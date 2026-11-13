@@ -8,6 +8,7 @@ struct TaskCard: View {
     @Environment(IslandModel.self) private var model
     @Environment(Feedback.self) private var feedback
     @AppStorage(Pref.idleOpacity) private var idleOpacity = 0.6
+    @AppStorage(Pref.capsuleFirefly) private var firefly = true
     @State private var isPressed = false
 
     var body: some View {
@@ -39,6 +40,13 @@ struct TaskCard: View {
         }
         .clipShape(shape)
         .glassEffect(.regular, in: shape)
+        // Fireflies under the bar at rest while something is going on; gone as it gathers.
+        .overlay {
+            if firefly, model.cardMode == .capsule, model.cardRest == .asleep {
+                BarFirefly(barSize: size)
+                    .transition(.opacity.animation(.easeOut(duration: 0.2)))
+            }
+        }
         .contentShape(shape)
         // The whole glass dips a little under a click, then opens.
         .scaleEffect(isPressed ? 0.965 : 1)

@@ -7,6 +7,8 @@ enum Pref {
     static let idleOpacity = "idleOpacity"
     /// The capsule under the notch draws itself in to a short bar while nobody looks at it.
     static let capsuleRests = "capsule.restsAsBar"
+    /// A firefly on the resting bar while you focus or have tasks left today.
+    static let capsuleFirefly = "capsule.firefly"
     static let pillOrigin = "pillOrigin"
     static let completionSound = "completionSound"
     static let celebrations = "celebrations"
@@ -63,6 +65,7 @@ enum Pref {
             fadeWhenIdle: true,
             idleOpacity: 0.6,
             capsuleRests: true,
+            capsuleFirefly: true,
             completionSound: true,
             celebrations: true,
             todayTimeline: true,

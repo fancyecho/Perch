@@ -29,6 +29,7 @@ struct GrabArea: NSViewRepresentable {
         let id = item.id
         let line = line
         let isRecording = item.isRecording
+        let isHeld = item.held
         view.url = item.url
         view.dragImage = item.thumb
         view.isHeld = item.held
@@ -60,6 +61,13 @@ struct GrabArea: NSViewRepresentable {
                 menu.addItem(ClosureMenuItem(L("Markup")) { line.markup(id) })
             }
             menu.addItem(ClosureMenuItem(L("Show in Finder")) { line.reveal(id) })
+            // Over to the other line, and into its folder.
+            if let side = line.items.first(where: { $0.id == id })?.side, !isHeld {
+                let other = side.other
+                menu.addItem(ClosureMenuItem(String(format: L("Move to “%@”"), Line.name(of: other))) {
+                    line.moveAcross(id, to: other)
+                })
+            }
             let item = line.items.first(where: { $0.id == id })
             let kept = item?.kept == true
             if !kept {
@@ -243,7 +251,8 @@ final class GrabView: NSView, NSDraggingSource {
                          sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation {
         // Apps pick copy. Finder picks move, so a folder or the Desktop keeps
         // the file. Delete is what lets the Dock's Trash accept it.
-        context == .outsideApplication ? [.copy, .move, .delete] : []
+        // Within Perch, only onto the other line, which moves it there.
+        context == .outsideApplication ? [.copy, .move, .delete] : [.move]
     }
 
     func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {

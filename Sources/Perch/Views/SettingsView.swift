@@ -185,6 +185,7 @@ private struct TasksPane: View {
     @AppStorage(Pref.fadeWhenIdle) private var fadeWhenIdle = true
     @AppStorage(Pref.idleOpacity) private var idleOpacity = 0.6
     @AppStorage(Pref.capsuleRests) private var capsuleRests = true
+    @AppStorage(Pref.capsuleFirefly) private var capsuleFirefly = true
     @AppStorage(Pref.todayTimeline) private var showsTimeline = true
     @AppStorage(Pref.completionSound) private var completionSound = true
     @AppStorage(Pref.celebrations) private var celebrations = true
@@ -239,6 +240,12 @@ private struct TasksPane: View {
                     }
                 }
                 let rests = taskStyle == TaskStyle.capsule.rawValue && capsuleRests
+                if rests {
+                    Toggle(isOn: $capsuleFirefly) {
+                        SettingLabel(tr("细条下的萤火", "Fireflies under the bar"),
+                                     tr("专注时一点暖光在细条下缓缓呼吸；今天还有任务时，一到三点萤绿光在下面飞舞、不时闪亮，每点代表一项没做完的事，飞近时玻璃会映出它们的光", "While you focus, a warm light breathes under the bar; with tasks left today, up to three green lights drift below it and flash, one for each task, and the glass catches their light"))
+                    }
+                }
                 if !rests {
                     Toggle(tr("闲置时淡化", "Fade when idle"), isOn: $fadeWhenIdle)
                 }
@@ -487,7 +494,8 @@ private struct HelpPane: View {
                 ReferenceRow(example: tr("指针在照片上按空格 · ⌫ · 在绳上按 ⌘Z", "Space · ⌫ on a photo · ⌘Z on the line"), meaning: tr("快速查看 · 丢掉 · 挂回刚丢的", "Quick Look · let it go · hang it back"))
                 ReferenceRow(example: tr("右键 › 固定 · 拿在手上", "Right-click › Pin · Hold"), meaning: tr("钉在左边不被挤掉 · 取下放在眼前", "Keep it at the left · hold it in front of you"))
                 ReferenceRow(example: tr("访达里右键图片 › 服务 › Hang on Perch", "In Finder, right-click an image › Services › Hang on Perch"), meaning: tr("把任意图片挂上绳", "Hang any image on the line"))
-                ReferenceRow(example: tr("指针停在菜单栏中间三分之一（灵动岛两侧）· ⌃⌥T", "Rest in the middle third of the menu bar, beside the island · ⌃⌥T"), meaning: tr("放下 / 收起晾衣绳", "Bring the line down / put it away"))
+                ReferenceRow(example: tr("指针停在菜单栏中间一半（灵动岛两侧）· ⌃⌥T", "Rest in the middle half of the menu bar, beside the island · ⌃⌥T"), meaning: tr("放下 / 收起晾衣绳", "Bring the line down / put it away"))
+                ReferenceRow(example: tr("点两段绳中间的标签 · 右键照片 › 挪到…", "Click a label between the lines · right-click a photo › Move to…"), meaning: tr("新截图改挂到这段 · 挪到另一段", "Hang new screenshots there · move to the other line"))
             }
 
             Section(tr("状态", "Status")) {

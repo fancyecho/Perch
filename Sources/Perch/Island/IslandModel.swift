@@ -239,8 +239,9 @@ final class IslandModel {
     static let barHeight: CGFloat = 5
     /// Halfway between bar and capsule, the drop is as wide as the capsule and still thin.
     static let stretchedHeight: CGFloat = 9
-    /// Where the pointer wakes the bar: far wider and taller than the bar itself.
-    static let barReach = CGSize(width: 168, height: 28)
+    /// Where the pointer wakes the bar: wider and taller than the bar itself, but not by so much
+    /// that it reaches the screenshot line's labels either side.
+    static let barReach = CGSize(width: 110, height: 22)
     static let peekRowHeight: CGFloat = 34
     static let panelSize = CGSize(width: 368, height: 560)
     /// The open island on its status page: gauges and a detail strip under them.

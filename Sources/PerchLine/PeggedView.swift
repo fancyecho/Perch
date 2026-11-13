@@ -38,7 +38,8 @@ struct PeggedView: View {
         // the card here just steps aside at once.
         .opacity(item.falling || item.flying ? 0 : (arrived ? 1 : 0))
         .transaction { t in if item.falling { t.animation = nil } }
-        .animation(.easeOut(duration: 0.16), value: item.flying)
+        // Lifting off it goes at once, so the flight takes over without the card showing twice.
+        .animation(item.flying ? nil : .easeOut(duration: 0.16), value: item.flying)
         .onAppear(perform: arrive)
         .onChange(of: item.flying) { was, now in if was && !now { land() } }
         .onChange(of: line.gust) { _, _ in breeze() }

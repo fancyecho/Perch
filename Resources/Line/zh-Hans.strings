@@ -73,3 +73,11 @@
 "Hang back" = "放回绳上";
 "Hang everything back" = "全部放回绳上";
 "Actual Size" = "实际大小";
+"Kept Screenshots" = "截图收藏";
+"Screenshots" = "截图";
+"New screenshots hang on this line" = "新截图挂在这一段";
+"Click to hang new screenshots on this line" = "点一下，新截图改挂到这一段";
+"Move to “%@”" = "挪到「%@」";
+"Choose" = "选择";
+"Screenshots hung on the left line are kept in this folder." = "挂在左边那段绳上的截图，会存进这个文件夹。";
+"Hang on “%@”" = "挂到「%@」";
