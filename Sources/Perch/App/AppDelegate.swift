@@ -9,7 +9,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let model = PanelModel()
     let swipe = SwipeTracker()
     let focus = FocusController()
-    let status = StatusController()
     private(set) var controller: PanelController?
     private(set) var island: IslandController?
     /// The screenshot line, while it's on.
@@ -82,9 +81,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         focus.onPassesChange = { [weak self] in self?.island?.focusChanged() }
         focus.start()
 
-        status.onAlert = { [weak self] alert in self?.island?.showAlert(alert) ?? false }
-        status.onOpenStatus = { [weak self] in self?.island?.openStatus() }
-        status.start()
 
         applyIslandPreference()
         LineLanguage.isChinese = { AppSettings.shared.isChinese }
@@ -208,7 +204,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func applyIslandPreference() {
         let enabled = UserDefaults.standard.bool(forKey: Pref.islandEnabled)
         if enabled, island == nil {
-            let island = IslandController(store: store, swipe: swipe, focus: focus, status: status)
+            let island = IslandController(store: store, swipe: swipe, focus: focus)
             island.onOpenSettings = { [weak self] tab in self?.showSettings(tab) }
             island.setCurtained(focus.isCurtained)
             self.island = island

@@ -1,29 +1,24 @@
 import SwiftUI
 
-/// The open island, with the date up beside the notch as on Alcove. Its first page holds what's
-/// playing (and in merged style today's tasks beside it, or alone when nothing plays); the page
-/// below it is the Mac's status. With neither playing nor tasks inside, the status is the one page.
-/// Two fingers up and down, or the dots at the edge, move between pages.
+/// The open island, with the date up beside the notch as on Alcove. It holds what's playing (and
+/// in merged style today's tasks beside it, or alone when nothing plays). With neither, a row of
+/// quick things to do: AirDrop, Focus, the screenshot line.
 struct ExpandedIslandView: View {
     @Environment(IslandModel.self) private var model
     @Environment(NowPlayingService.self) private var media
     @Environment(FocusController.self) private var focus
-    @Environment(StatusPreferences.self) private var statusPrefs
 
     var body: some View {
         TimelineView(.everyMinute) { context in
             let now = context.date
             let hasMedia = media.track != nil
             let showsTasks = model.taskStyle == .merged && !model.isLocked
-            let pages = IslandPage.available(hasMain: hasMedia || showsTasks, gauges: statusPrefs.islandGauges, locked: model.isLocked)
-            let page = pages.contains(model.page) ? model.page : pages[0]
             VStack(spacing: 0) {
                 Group {
                     if let hud = model.inlineLevel {
                         LevelWings(hud: hud)
                     } else {
-                        TopWings(now: now, hasMedia: hasMedia && page == .main, showsTasks: showsTasks && page == .main,
-                                 showsStatus: page == .status && pages.count > 1)
+                        TopWings(now: now, hasMedia: hasMedia, showsTasks: showsTasks)
                     }
                 }
                 .frame(height: model.geometry.notchSize.height)
@@ -31,73 +26,58 @@ struct ExpandedIslandView: View {
                     if let pass = focus.passes.first {
                         PassStrip(pass: pass).padding(.top, 12)
                     } else {
-                        pageContent(page, now: now, hasMedia: hasMedia, showsTasks: showsTasks)
-                            .id(page)
-                            // The pages stack like the dots: the status page sits below, so it rises
-                            // into place, and going back the player settles down from above.
-                            .transition(.islandPage(forward: model.pageMovesForward))
+                        content(now: now, hasMedia: hasMedia, showsTasks: showsTasks)
                     }
                 }
                 .padding(.horizontal, 18)
                 .padding(.bottom, 14)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 .clipped()
-                .overlay(alignment: .leading) {
-                    if pages.count > 1, focus.passes.isEmpty {
-                        PageDots(pages: pages, current: page)
-                            .padding(.leading, 6)
-                            .padding(.bottom, 8)
-                    }
-                }
             }
         }
         .foregroundStyle(.white)
     }
 
     @ViewBuilder
-    private func pageContent(_ page: IslandPage, now: Date, hasMedia: Bool, showsTasks: Bool) -> some View {
-        switch page {
-        case .main:
-            if showsTasks {
-                HStack(alignment: .top, spacing: 16) {
-                    if hasMedia {
-                        MediaColumn().frame(width: 150)
-                    }
-                    TodayColumn(now: now)
+    private func content(now: Date, hasMedia: Bool, showsTasks: Bool) -> some View {
+        if showsTasks {
+            HStack(alignment: .top, spacing: 16) {
+                if hasMedia {
+                    MediaColumn().frame(width: 150)
                 }
-                .padding(.top, 10)
-            } else {
-                WidePlayer().padding(.top, 8)
+                TodayColumn(now: now)
             }
-        case .status:
-            StatusGlance(showsHint: !hasMedia && !showsTasks).padding(.top, 10)
+            .padding(.top, 10)
+        } else if hasMedia {
+            WidePlayer().padding(.top, 8)
+        } else if model.isLocked {
+            NothingPlaying().padding(.top, 14)
+        } else {
+            QuickShelf().padding(.top, 2)
         }
     }
 }
 
-/// Which page of the open island shows, as dots down its left edge; each one goes to its page.
-private struct PageDots: View {
-    let pages: [IslandPage]
-    let current: IslandPage
-    @Environment(IslandModel.self) private var model
-
+/// The open island on the lock screen with nothing playing.
+private struct NothingPlaying: View {
     var body: some View {
-        VStack(spacing: 4) {
-            ForEach(pages, id: \.self) { page in
-                Button { model.pageHandler?(page) } label: {
-                    Capsule()
-                        .fill(Color.white.opacity(page == current ? 0.9 : 0.28))
-                        .frame(width: 4, height: page == current ? 12 : 4)
-                        .padding(3)
-                        .contentShape(.rect)
-                }
-                .buttonStyle(.plain)
-                .help(page == .main ? tr("正在播放", "Now Playing") : tr("系统状态", "System Status"))
+        HStack(spacing: 10) {
+            Image(systemName: "music.note")
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(.white.opacity(0.35))
+                .frame(width: 36, height: 36)
+                .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(tr("没有正在播放的内容", "Nothing playing"))
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.75))
+                Text(tr("在任意 App 中播放，就能在这里控制", "Play something in any app to control it here"))
+                    .font(.system(size: 11))
+                    .foregroundStyle(.white.opacity(0.45))
+                    .lineLimit(1)
             }
+            Spacer(minLength: 0)
         }
-        .animation(.spring(duration: 0.35, bounce: 0.3), value: current)
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel(tr("灵动岛页面，双指上下滑切换", "Island pages; swipe up or down with two fingers"))
     }
 }
 
@@ -106,15 +86,13 @@ private struct TopWings: View {
     let now: Date
     let hasMedia: Bool
     let showsTasks: Bool
-    var showsStatus = false
     @Environment(NowPlayingService.self) private var media
     @Environment(TaskStore.self) private var store
+    @Environment(PowerMonitor.self) private var power
 
     var body: some View {
         WingsLayout {
             leading
-                .id(showsStatus)
-                .transition(.opacity.animation(.easeInOut(duration: 0.25)))
         } trailing: {
             trailing
         }
@@ -133,9 +111,6 @@ private struct TopWings: View {
                     Text(media.sourceName ?? "")
                         .lineLimit(1)
                 }
-            } else if showsStatus {
-                Label(tr("系统状态", "Status"), systemImage: "gauge.with.dots.needle.67percent")
-                    .lineLimit(1)
             } else if showsTasks {
                 let progress = store.progress(now: now)
                 let remaining = progress.total - progress.done
@@ -144,6 +119,14 @@ private struct TopWings: View {
                         .frame(width: 13, height: 13)
                     Text(remaining > 0 ? tr("还剩 \(remaining) 项", "\(remaining) left") : tr("都做完了", "All done"))
                         .lineLimit(1)
+                }
+            } else if let battery = power.battery {
+                // With nothing playing, the Mac's own battery, as Alcove shows it.
+                HStack(spacing: 5) {
+                    BatteryGlyph(level: battery.level, isCharging: battery.isPluggedIn && battery.isCharging, tint: battery.tint)
+                        .frame(width: 22, height: 10)
+                    Text("\(battery.level)%")
+                        .font(.system(size: 11, weight: .semibold, design: .rounded).monospacedDigit())
                 }
             }
         }
@@ -367,344 +350,6 @@ private struct TimedProgress: View {
     }
 }
 
-/// The island's status page, in four calm rows: the battery and what's connected, the Mac's vital
-/// signs as four gauges, the chosen one over the last two minutes, and how full the disk is.
-private struct StatusGlance: View {
-    @Environment(StatusPreferences.self) private var statusPrefs
-    /// Whether to say nothing is playing, when there are no gauges to show instead.
-    var showsHint = true
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            StatusHeader()
-            if statusPrefs.islandGauges || !showsHint {
-                SystemGauges()
-                StatusDetail()
-                DiskRow()
-            } else {
-                HStack(spacing: 7) {
-                    Image(systemName: "music.note")
-                        .foregroundStyle(.white.opacity(0.35))
-                    Text(tr("没有正在播放的内容 · 在任意 App 中播放就能在这里控制", "Nothing playing · play something in any app to control it here"))
-                        .font(.system(size: 11.5))
-                        .foregroundStyle(.white.opacity(0.5))
-                        .lineLimit(2)
-                }
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-}
-
-/// The battery, the headphones and where the sound goes, as icons and numbers only; the names are
-/// in the tooltips, so nothing gets cut short.
-private struct StatusHeader: View {
-    @Environment(SystemVolume.self) private var volume
-    @Environment(BluetoothMonitor.self) private var bluetooth
-    @Environment(PowerMonitor.self) private var power
-
-    var body: some View {
-        let devices = Array(bluetooth.devices.prefix(3))
-        HStack(spacing: 16) {
-            if let battery = power.battery {
-                HStack(spacing: 5) {
-                    BatteryGlyph(level: battery.level, isCharging: battery.isPluggedIn && battery.isCharging, tint: battery.tint)
-                        .frame(width: 19, height: 8.5)
-                    Text("\(battery.level)%")
-                }
-            }
-            ForEach(devices) { device in
-                HStack(spacing: 4) {
-                    Image(systemName: device.symbol)
-                    if let level = device.battery.main { Text("\(level)%") }
-                }
-                .help(device.name)
-            }
-            // The output is often one of those devices already; then it isn't shown twice.
-            if !volume.route.name.isEmpty,
-               !devices.contains(where: { $0.name.caseInsensitiveCompare(volume.route.name) == .orderedSame }) {
-                Image(systemName: bluetooth.refine(volume.route).symbol)
-                    .help(volume.route.name)
-            }
-            Spacer(minLength: 0)
-        }
-        .font(.system(size: 11, weight: .medium).monospacedDigit())
-        .foregroundStyle(.white.opacity(0.62))
-        .lineLimit(1)
-        .padding(.horizontal, 6)
-    }
-}
-
-/// CPU, memory, temperature and network as small rings, each in an equal slot. CPU, memory and
-/// network choose the chart below; temperature is a reading on its own. Each ring stays put in its
-/// slot while its number changes width (spreading them with spacers let every new reading nudge
-/// all four sideways).
-private struct SystemGauges: View {
-    @Environment(SystemMonitor.self) private var monitor
-    @Environment(IslandModel.self) private var model
-
-    var body: some View {
-        HStack(spacing: 6) {
-            tile(.cpu) {
-                MiniGauge(symbol: "cpu", fraction: monitor.cpu.usage / 100, value: "\(Fmt.percent(monitor.cpu.usage))%",
-                          label: "CPU", tint: tint(Palette.cpu, monitor.cpu.usage))
-            }
-            tile(.memory) {
-                MiniGauge(symbol: "memorychip", fraction: monitor.memory.usedPercent / 100,
-                          value: "\(Fmt.percent(monitor.memory.usedPercent))%", label: tr("内存", "Memory"),
-                          tint: monitor.memory.pressureLevel > 1 ? .orange : Palette.memory)
-            }
-            if let celsius = monitor.temperature?.cpu {
-                MiniGauge(symbol: celsius >= 75 ? "thermometer.high" : celsius >= 50 ? "thermometer.medium" : "thermometer.low",
-                          fraction: (celsius - 25) / 75, value: "\(Int(celsius.rounded()))°",
-                          label: tr("温度", "Temp"), tint: StatusDetail.temperatureTint(celsius), arc: Self.heat)
-                    .padding(.horizontal, 7)
-                    .padding(.vertical, 5)
-                    .help(monitor.temperature?.gpu.map { "GPU \(Int($0.rounded()))°" } ?? "")
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            tile(.network) {
-                // Measured against the last two minutes' busiest moment, so the ring shows how busy
-                // the link is now compared with lately, and a quiet link stays near empty.
-                let peak = max(monitor.downHistory.max() ?? 0, monitor.upHistory.max() ?? 0, 256_000)
-                NetworkGauge(down: monitor.network.down, up: monitor.network.up, peak: peak)
-            }
-        }
-    }
-
-    /// The chosen gauge sits on a faint plate; the others step back a little.
-    private func tile<Content: View>(_ metric: StatusMetric, @ViewBuilder content: () -> Content) -> some View {
-        let selected = StatusDetail.charted(model.statusMetric) == metric
-        return Button { model.metricHandler?(metric) } label: {
-            content()
-                .padding(.horizontal, 7)
-                .padding(.vertical, 5)
-                .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.white.opacity(selected ? 0.09 : 0)))
-                .contentShape(.rect(cornerRadius: 12))
-        }
-        .buttonStyle(.plain)
-        .opacity(selected ? 1 : 0.72)
-        .animation(.smooth(duration: 0.25), value: selected)
-        .accessibilityAddTraits(selected ? .isSelected : [])
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    /// Temperature along the ring: cool mint where it starts, warming to amber and red as it
-    /// wraps round, so a hot reading carries its color at the tip.
-    private static let heat = AnyShapeStyle(AngularGradient(
-        stops: [.init(color: .mint, location: 0), .init(color: .mint, location: 0.3),
-                .init(color: .yellow, location: 0.55), .init(color: .orange, location: 0.75),
-                .init(color: Color(red: 1, green: 0.32, blue: 0.3), location: 1)],
-        center: .center, startAngle: .degrees(-8), endAngle: .degrees(352)))
-
-    /// Past 90% a gauge turns red.
-    private func tint(_ base: Color, _ percent: Double) -> Color {
-        percent >= 90 ? Color(red: 1, green: 0.38, blue: 0.36) : base
-    }
-}
-
-/// The chosen gauge over the last two minutes: a chart, and above it what reading it needs, the
-/// average and the peak of what's drawn, or the totals the ring can't say.
-private struct StatusDetail: View {
-    @Environment(SystemMonitor.self) private var monitor
-    @Environment(IslandModel.self) private var model
-
-    /// Only CPU, memory and network have a chart; a heat warning opens on the CPU's.
-    static func charted(_ metric: StatusMetric) -> StatusMetric {
-        metric == .memory || metric == .network ? metric : .cpu
-    }
-
-    var body: some View {
-        let metric = Self.charted(model.statusMetric)
-        let facts = facts(metric)
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(alignment: .firstTextBaseline) {
-                Text(facts.0)
-                    .font(.system(size: 11, weight: .semibold).monospacedDigit())
-                    .foregroundStyle(.white.opacity(0.85))
-                Spacer(minLength: 10)
-                Text(facts.1)
-                    .font(.system(size: 10.5, weight: .medium).monospacedDigit())
-                    .foregroundStyle(facts.2 ?? .white.opacity(0.45))
-            }
-            .lineLimit(1)
-            chart(metric)
-                .frame(height: 30)
-        }
-        .padding(.horizontal, 6)
-        .id(metric)
-        .transition(.opacity.animation(.smooth(duration: 0.25)))
-    }
-
-    @ViewBuilder
-    private func chart(_ metric: StatusMetric) -> some View {
-        switch metric {
-        case .memory:
-            Sparkline(values: monitor.memoryHistory, maxValue: 100, tint: monitor.memory.pressureLevel > 1 ? .orange : Palette.memory)
-        case .network:
-            MirrorChart(top: monitor.downHistory, bottom: monitor.upHistory, topTint: Palette.down, bottomTint: Palette.up)
-        default:
-            Sparkline(values: monitor.cpuHistory, maxValue: 100, tint: Palette.cpu)
-        }
-    }
-
-    /// The headline, the quieter note on the right, and that note's color when it's a warning.
-    private func facts(_ metric: StatusMetric) -> (String, String, Color?) {
-        switch metric {
-        case .memory:
-            let m = monitor.memory
-            let swap = m.swapUsed > 512 * 1_048_576 ? tr(" · 交换 \(Fmt.memory(m.swapUsed))", " · swap \(Fmt.memory(m.swapUsed))") : ""
-            let note: (String, Color?) = switch m.pressureLevel {
-            case 4: (tr("内存压力严重", "Critical pressure") + swap, .red)
-            case 2: (tr("内存压力偏高", "Pressure rising") + swap, .orange)
-            default: (tr("内存压力正常", "Pressure normal") + swap, nil)
-            }
-            return (tr("已用 \(Fmt.memory(m.used)) / \(Fmt.memory(m.total))", "\(Fmt.memory(m.used)) of \(Fmt.memory(m.total)) used"), note.0, note.1)
-        case .network:
-            let down = monitor.downHistory.max() ?? monitor.network.down
-            let up = monitor.upHistory.max() ?? monitor.network.up
-            let link: String
-            if let wifi = monitor.wifi {
-                let rate = wifi.rate >= 1000 ? String(format: "%.1f Gbps", wifi.rate / 1000) : String(format: "%.0f Mbps", wifi.rate)
-                link = "Wi-Fi \(rate)" + (monitor.latency?.internet.map { " · \(Int($0.rounded())) ms" } ?? "")
-            } else {
-                link = tr("有线网络", "Wired")
-            }
-            return (tr("峰值 ↓ \(Fmt.rate(down))  ↑ \(Fmt.rate(up))", "Peak ↓ \(Fmt.rate(down))  ↑ \(Fmt.rate(up))"), link, nil)
-        default:
-            let history = monitor.cpuHistory
-            let average = history.isEmpty ? monitor.cpu.usage : history.reduce(0, +) / Double(history.count)
-            let hot = (monitor.temperature?.cpu ?? 0) >= 90
-            return (tr("平均 \(Fmt.percent(average))% · 峰值 \(Fmt.percent(history.max() ?? monitor.cpu.usage))%",
-                       "Average \(Fmt.percent(average))% · peak \(Fmt.percent(history.max() ?? monitor.cpu.usage))%"),
-                    tr("用户 \(Fmt.percent(monitor.cpu.user))% · 系统 \(Fmt.percent(monitor.cpu.system))%",
-                       "user \(Fmt.percent(monitor.cpu.user))% · system \(Fmt.percent(monitor.cpu.system))%"), hot ? .red : nil)
-        }
-    }
-
-    static func temperatureTint(_ celsius: Double) -> Color {
-        celsius >= 90 ? .red : celsius >= 75 ? .orange : .mint
-    }
-}
-
-/// How full the disk is: a bar across the page, its share and what's free. The sizes are in the
-/// tooltip.
-private struct DiskRow: View {
-    @Environment(SystemMonitor.self) private var monitor
-
-    var body: some View {
-        let disk = monitor.disk
-        let fraction = min(max(disk.usedPercent / 100, 0), 1)
-        // Silver rather than the dashboard's orange, which a busy memory ring already wears.
-        let tint = disk.usedPercent >= 90 ? Color.orange : Color(white: 0.82)
-        HStack(spacing: 8) {
-            Image(systemName: "internaldrive")
-                .font(.system(size: 10.5, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.5))
-            Capsule()
-                .fill(Color.white.opacity(0.12))
-                .overlay(alignment: .leading) {
-                    GeometryReader { proxy in
-                        Capsule()
-                            .fill(LinearGradient(colors: [tint.opacity(0.75), tint], startPoint: .leading, endPoint: .trailing))
-                            .frame(width: max(proxy.size.height, proxy.size.width * fraction))
-                    }
-                }
-                .frame(height: 4)
-                .animation(.smooth(duration: 0.6), value: fraction)
-            Text(tr("\(Fmt.percent(disk.usedPercent))% · \(Fmt.bytes(disk.free)) 可用", "\(Fmt.percent(disk.usedPercent))% · \(Fmt.bytes(disk.free)) free"))
-                .font(.system(size: 10.5, weight: .medium).monospacedDigit())
-                .foregroundStyle(disk.usedPercent >= 90 ? AnyShapeStyle(Color.orange) : AnyShapeStyle(.white.opacity(0.55)))
-                .fixedSize()
-        }
-        .padding(.horizontal, 6)
-        .opacity(disk.total > 0 ? 1 : 0)
-        .help(tr("\(disk.name) · 已用 \(Fmt.bytes(disk.total - disk.free)) / \(Fmt.bytes(disk.total))",
-                 "\(disk.name) · \(Fmt.bytes(disk.total - disk.free)) of \(Fmt.bytes(disk.total)) used"))
-    }
-}
-
-private struct MiniGauge: View {
-    let symbol: String
-    let fraction: Double
-    let value: String
-    let label: String
-    let tint: Color
-    /// What the arc is drawn with, when it's more than the tint.
-    var arc: AnyShapeStyle?
-
-    var body: some View {
-        HStack(spacing: 6) {
-            ZStack {
-                Circle().stroke(Color.white.opacity(0.12), lineWidth: 2.5)
-                Circle()
-                    .trim(from: 0, to: min(max(fraction, 0.02), 1))
-                    .stroke(arc ?? AnyShapeStyle(tint), style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
-                    .rotationEffect(.degrees(-90))
-                    .animation(.smooth(duration: 0.6), value: fraction)
-                Image(systemName: symbol)
-                    .font(.system(size: 8.5, weight: .bold))
-                    .foregroundStyle(.white.opacity(0.75))
-            }
-            .frame(width: 24, height: 24)
-            VStack(alignment: .leading, spacing: 0) {
-                Text(value)
-                    .font(.system(size: 12, weight: .semibold, design: .rounded).monospacedDigit())
-                    .contentTransition(.numericText())
-                    .animation(.snappy, value: value)
-                Text(label)
-                    .font(.system(size: 9.5, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.5))
-            }
-            .lineLimit(1)
-            .fixedSize()
-        }
-    }
-}
-
-/// Download and upload as two halves of one ring, like the chart below it: download fills the right
-/// half clockwise from the top, upload the left half the other way.
-private struct NetworkGauge: View {
-    let down: Double
-    let up: Double
-    /// The rate a full half stands for.
-    let peak: Double
-
-    var body: some View {
-        // A square root lifts light traffic off zero without letting a burst swamp everything else.
-        let downShare = min(sqrt(down / peak), 1) * 0.5
-        let upShare = min(sqrt(up / peak), 1) * 0.5
-        HStack(spacing: 6) {
-            ZStack {
-                Circle().stroke(Color.white.opacity(0.12), lineWidth: 2.5)
-                Circle()
-                    .trim(from: 0, to: max(downShare, 0.01))
-                    .stroke(Palette.down, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
-                    .rotationEffect(.degrees(-90))
-                Circle()
-                    .trim(from: 1 - max(upShare, 0.01), to: 1)
-                    .stroke(Palette.up, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
-                    .rotationEffect(.degrees(-90))
-                Image(systemName: "network")
-                    .font(.system(size: 8.5, weight: .bold))
-                    .foregroundStyle(.white.opacity(0.75))
-            }
-            .frame(width: 24, height: 24)
-            .animation(.smooth(duration: 0.6), value: downShare)
-            .animation(.smooth(duration: 0.6), value: upShare)
-            VStack(alignment: .leading, spacing: 0) {
-                // The arrows take their half's color, tying the numbers to the ring.
-                Text("\(Text("↓").foregroundStyle(Palette.down)) \(Fmt.compactRate(down))")
-                Text("\(Text("↑").foregroundStyle(Palette.up)) \(Fmt.compactRate(up))")
-                    .foregroundStyle(.white.opacity(0.6))
-            }
-            .font(.system(size: 10, weight: .semibold, design: .rounded).monospacedDigit())
-            .lineLimit(1)
-            .fixedSize()
-        }
-    }
-}
-
 /// A hairline of progress; it thickens under the pointer and can be dragged to seek.
 private struct MiniProgress: View {
     @Environment(NowPlayingService.self) private var media
@@ -874,33 +519,5 @@ private struct IslandLinkButton: View {
         .buttonStyle(PressScaleStyle())
         .onHover { hovering = $0 }
         .animation(.easeOut(duration: 0.15), value: hovering)
-    }
-}
-
-/// A page of the open island arriving or leaving: a short rise or fall with a soft blur, the same
-/// distance however tall the island grows meanwhile.
-private struct PageSlide: ViewModifier {
-    let offset: CGFloat
-    let blur: CGFloat
-    let opacity: Double
-
-    func body(content: Content) -> some View {
-        content
-            .offset(y: offset)
-            .blur(radius: blur)
-            .opacity(opacity)
-    }
-}
-
-extension AnyTransition {
-    static func islandPage(forward: Bool) -> AnyTransition {
-        .asymmetric(
-            insertion: .modifier(active: PageSlide(offset: forward ? 22 : -22, blur: 6, opacity: 0),
-                                 identity: PageSlide(offset: 0, blur: 0, opacity: 1))
-                .animation(.smooth(duration: 0.42).delay(0.06)),
-            removal: .modifier(active: PageSlide(offset: forward ? -14 : 14, blur: 5, opacity: 0),
-                               identity: PageSlide(offset: 0, blur: 0, opacity: 1))
-                .animation(.easeIn(duration: 0.16))
-        )
     }
 }

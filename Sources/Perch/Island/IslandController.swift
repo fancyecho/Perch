@@ -16,6 +16,8 @@ struct IslandPreferences: Equatable {
     var haptics: Bool
     /// The capsule rests as a bar instead of fading.
     var capsuleRests: Bool
+    /// Things dragged up to the notch can be sent by AirDrop.
+    var airDrop: Bool
 
     static var current: IslandPreferences {
         let defaults = UserDefaults.standard
@@ -30,7 +32,8 @@ struct IslandPreferences: Equatable {
             reminderTiming: .current,
             review: defaults.bool(forKey: Pref.reviewEnabled) ? defaults.integer(forKey: Pref.reviewTime) : nil,
             haptics: defaults.bool(forKey: Pref.islandHaptics),
-            capsuleRests: defaults.bool(forKey: Pref.capsuleRests)
+            capsuleRests: defaults.bool(forKey: Pref.capsuleRests),
+            airDrop: defaults.bool(forKey: Pref.islandAirDrop)
         )
     }
 }
@@ -64,9 +67,10 @@ final class IslandController {
 
     private let store: TaskStore
     private let focus: FocusController
-    private let status: StatusController
     private let panel = IslandPanel()
     private let keyTap = MediaKeyTap()
+    private let dragWatcher = DragWatcher()
+    private let airDrop = AirDropSender()
     /// Keeps the window fixed over the notch through Space switches and on the lock screen.
     private var notchSpace: NotchSpace?
     private var lockObservers: [NSObjectProtocol] = []
@@ -77,7 +81,7 @@ final class IslandController {
     private var swipeSurface: SwipeSurface?
     private var swipeTravel = CGSize.zero
     private var swipeArmed = false
-    /// A mouse wheel sends a burst of events per flick; one turn of the page per burst.
+    /// A mouse wheel sends a burst of events per flick; one move per burst.
     private var wheelQuietUntil = Date.distantPast
     private var glowTask: Task<Void, Never>?
     private var unlockTask: Task<Void, Never>?
@@ -106,6 +110,7 @@ final class IslandController {
     private var cardFadeTask: Task<Void, Never>?
     private var restTask: Task<Void, Never>?
     private var wakeTask: Task<Void, Never>?
+    private var dropTask: Task<Void, Never>?
     /// Taking the keyboard during the window's first moments (as when a notification click launches
     /// Perch straight into the task list) sent SwiftUI into an endless constraints loop.
     private let keyboardReadyAt = Date.now.addingTimeInterval(1.5)
@@ -121,10 +126,9 @@ final class IslandController {
     private var isListOpen: Bool { model.isShowingTasks || model.cardMode == .panel }
     private var isOpen: Bool { model.isExpanded || isListOpen }
 
-    init(store: TaskStore, swipe: SwipeTracker, focus: FocusController, status: StatusController) {
+    init(store: TaskStore, swipe: SwipeTracker, focus: FocusController) {
         self.store = store
         self.focus = focus
-        self.status = status
         model = IslandModel(geometry: NotchGeometry(screen: NotchGeometry.preferredScreen()))
         taskPanel.mode = .panel
         taskPanel.isInIsland = true
@@ -142,8 +146,6 @@ final class IslandController {
             .environment(Feedback.shared)
             .environment(focus)
             .environment(ScheduleStore.shared)
-            .environment(status.monitor)
-            .environment(status.prefs)
         let hosting = IslandHostingView(rootView: root)
         hosting.sizingOptions = []
         // The window sits right over the camera housing, so its safe area flips around as it gains
@@ -162,14 +164,13 @@ final class IslandController {
         }
         taskPanel.settingsHandler = { [weak self] tab in self?.onOpenSettings?(tab) }
         model.settingsHandler = { [weak self] tab in self?.onOpenSettings?(tab) }
-        model.metricHandler = { [weak self] metric in
-            guard let self, self.model.statusMetric != metric else { return }
-            if self.preferences.haptics { Haptics.tick() }
-            withAnimation(.snappy(duration: 0.3)) { self.model.statusMetric = metric }
-        }
-        model.pageHandler = { [weak self] page in self?.showPage(page) }
-        model.alertHandler = { [weak self] alert in self?.handleAlert(alert) }
         model.reviewHandler = { [weak self] in self?.openReview() }
+        model.dropHandler = { [weak self] in self?.dropped() ?? false }
+        model.shareHandler = { [weak self] source in self?.share(from: source) }
+        dragWatcher.onMove = { [weak self] point in self?.dragMoved(to: point) }
+        dragWatcher.onEnd = { [weak self] in self?.dragEnded() }
+        airDrop.onFinish = { [weak self] outcome in self?.airDropFinished(outcome) }
+        airDrop.sourceFrame = { [weak self] in self?.notchFrame ?? .zero }
         volume.onChange = { [weak self] in self?.showLevel(.volume) }
         volume.onRouteChange = { [weak self] route in self?.routeChanged(route) }
         brightness.onChange = { [weak self] in self?.brightnessChanged() }
@@ -233,6 +234,7 @@ final class IslandController {
         swipeMonitor = nil
         removeKeyMonitor()
         keyTap.stop()
+        dragWatcher.stop()
         for task in [dwellTask, collapseTask, watchTask, bannerTask, inlineTask, routeTask, lingerTask, trustTask, alarmTask, clockTask, peekTask, cardFadeTask] {
             task?.cancel()
         }
@@ -240,7 +242,6 @@ final class IslandController {
         media.stop()
         bluetooth.stop()
         power.stop()
-        status.watch(false)
         notchSpace?.remove(panel)
         notchSpace = nil
         panel.orderOut(nil)
@@ -255,15 +256,12 @@ final class IslandController {
         bannerTask?.cancel()
         bluetooth.refreshBatteries()
         if preferences.haptics { Haptics.tick() }
-        let pages = islandPages
-        if !pages.contains(model.page) { model.page = pages[0] }
         withAnimation(Self.open) {
             model.isExpanded = true
             model.banner = nil
         }
         refreshPointer()
         startWatching()
-        updateStatusWatch()
     }
 
     /// The stretch of `screen` (in screen coordinates) the island and the capsule under it take at
@@ -287,22 +285,12 @@ final class IslandController {
         model.isExpanded ? collapse() : expand()
     }
 
-    /// Processes, disk, Wi-Fi and latency are only sampled while the status page is on screen.
-    private func updateStatusWatch() {
-        status.watch(model.isExpanded && model.page == .status && focus.passes.isEmpty)
-    }
-
     func collapse() {
         guard model.isExpanded else { return }
         withAnimation(Self.close) {
             model.isExpanded = false
             model.inlineLevel = nil
-        } completion: { [weak self] in
-            // It opens on the first page again next time.
-            guard let self, !self.model.isExpanded else { return }
-            self.model.page = .main
         }
-        updateStatusWatch()
         refreshPointer()
         showPendingReminder()
     }
@@ -340,7 +328,7 @@ final class IslandController {
                     model.inlineLevel = nil
                 }
             }
-            // Read only now: taken while the island was still open (the player, the status page),
+            // Read only now: taken while the island was still open (the player),
             // it pinned the panel so low that its last rows fell off the bottom of the window.
             let top = model.cardTop
             withAnimation(PanelController.morph) {
@@ -385,44 +373,6 @@ final class IslandController {
 
     func toggleTaskList() {
         isListOpen ? closeTaskList() : openTaskList(focusInput: true)
-    }
-
-    // MARK: - Status
-
-    /// Opens the island on its status page, with one of the details showing.
-    func openStatus(_ metric: StatusMetric? = nil) {
-        guard !model.isLocked, !model.isCurtained else { return }
-        if let metric { model.statusMetric = metric }
-        guard islandPages.contains(.status) else { return }
-        if model.isExpanded {
-            showPage(.status)
-        } else {
-            model.page = .status
-            expand()
-        }
-    }
-
-    /// Shows a Mac alert; false when it should go to Notification Center instead (on the lock screen).
-    func showAlert(_ alert: SystemAlert) -> Bool {
-        guard !model.isLocked else { return false }
-        // The island already says low battery its own way.
-        if alert.kind == .battery, preferences.battery { return true }
-        present(.alert(alert), for: .seconds(10))
-        if model.banner?.kind == .alert { flash(.alert) }
-        return true
-    }
-
-    private func handleAlert(_ alert: SystemAlert) {
-        bannerTask?.cancel()
-        withAnimation(Self.close) { model.banner = nil }
-        refreshPointer()
-        switch alert.kind {
-        case .runaway(let pid): NSRunningApplication(processIdentifier: pid)?.terminate()
-        case .hot: openStatus(.temperature)
-        case .memory: openStatus(.memory)
-        case .disk: openStatus()
-        case .battery: openStatus()
-        }
     }
 
     // MARK: - The capsule
@@ -538,7 +488,7 @@ final class IslandController {
 
     private func present(_ banner: IslandBanner, for duration: Duration) {
         // Status still shows beside the notch over an open glass panel; nothing drops onto it.
-        guard !model.isExpanded, !model.isShowingTasks, !(banner.dropsDown && model.cardMode == .panel),
+        guard !model.isExpanded, !model.isShowingTasks, model.drop == nil, !(banner.dropsDown && model.cardMode == .panel),
               !model.isCurtained || banner.passesCurtain else { return }
         if model.banner?.kind == banner.kind {
             if model.banner?.subject == banner.subject {
@@ -998,7 +948,7 @@ final class IslandController {
         let screen = model.geometry.screenFrame
         // Reaches a little past the top edge, where the pointer stops.
         let rect = NSRect(x: screen.midX - layout.width / 2, y: screen.maxY - layout.height, width: layout.width, height: layout.height + 2)
-        guard model.isExpanded else { return rect }
+        guard model.isExpanded || model.drop != nil else { return rect }
         // Some slack while open, so brushing an edge doesn't snap it shut.
         return rect.insetBy(dx: -8, dy: -6)
     }
@@ -1097,9 +1047,8 @@ final class IslandController {
         return nil
     }
 
-    /// A mouse wheel over the island does what a two-finger swipe does: down opens it and moves to
-    /// the page below, up to the page above (closing it from the first), sideways (a tilting wheel)
-    /// changes the track. It's left alone over the capsule, where a stray roll shouldn't complete
+    /// A mouse wheel over the island does what a two-finger swipe does: down opens it, up closes
+    /// it, sideways (a tilting wheel) changes the track. It's left alone over the capsule, where a stray roll shouldn't complete
     /// a task.
     private func handleWheel(_ event: NSEvent) -> NSEvent? {
         guard model.isHovering else { return event }
@@ -1122,40 +1071,8 @@ final class IslandController {
         return row.contains(NSEvent.mouseLocation)
     }
 
-    /// The pages the open island has right now (see IslandPage).
-    private var islandPages: [IslandPage] {
-        let hasMain = media.track != nil || (preferences.taskStyle == .merged && !model.isLocked)
-        return IslandPage.available(hasMain: hasMain, gauges: status.prefs.islandGauges, locked: model.isLocked)
-    }
-
-    /// Moves the open island to the page below (`forward`) or above. Up from the first page, the
-    /// island closes, as swiping up always did.
-    func turnPage(forward: Bool) {
-        let pages = islandPages
-        let index = pages.firstIndex(of: model.page) ?? 0
-        let next = index + (forward ? 1 : -1)
-        guard pages.indices.contains(next) else {
-            if !forward { collapse() }
-            return
-        }
-        showPage(pages[next])
-    }
-
-    func showPage(_ page: IslandPage) {
-        let pages = islandPages
-        guard page != model.page, let target = pages.firstIndex(of: page) else { return }
-        // The direction lands first, so the page leaving already carries it.
-        model.pageMovesForward = target > (pages.firstIndex(of: model.page) ?? 0)
-        if preferences.haptics { Haptics.tick() }
-        Task { [weak self] in
-            guard let self else { return }
-            withAnimation(.spring(duration: 0.45, bounce: 0.12)) { self.model.page = page }
-            self.updateStatusWatch()
-        }
-    }
-
     /// Sideways changes the track (to the left for the next one, like turning a page). Down opens
-    /// the island; once open, up and down move between its pages.
+    /// the island, up closes it.
     private func finishIslandSwipe() {
         let dx = swipeTravel.width
         let dy = swipeTravel.height
@@ -1170,8 +1087,7 @@ final class IslandController {
             }
         } else if abs(dy) > 40, abs(dy) > abs(dx) {
             if model.isExpanded {
-                // Fingers moving down go down to the next page.
-                turnPage(forward: dy > 0)
+                if dy < 0 { collapse() }
             } else if dy > 0 {
                 expand()
             }
@@ -1204,6 +1120,170 @@ final class IslandController {
         withAnimation(.spring(duration: 0.35, bounce: 0.25)) { model.capsuleSwipe = 0 }
     }
 
+    // MARK: - AirDrop
+
+    /// The camera housing on screen, where AirDrop's sheet grows from.
+    private var notchFrame: NSRect {
+        let screen = model.geometry.screenFrame
+        let notch = model.geometry.notchSize
+        return NSRect(x: screen.midX - notch.width / 2, y: screen.maxY - notch.height, width: notch.width, height: notch.height)
+    }
+
+    /// How close a drag has to come for the drop zone to open: around the zone, wider and lower
+    /// than it, so it's there to meet the parcel on its way up.
+    private var dropReach: NSRect {
+        let screen = model.geometry.screenFrame
+        let zone = model.layout(for: .drop, hovering: false)
+        let size = CGSize(width: zone.width + 160, height: zone.height + 70)
+        return NSRect(x: screen.midX - size.width / 2, y: screen.maxY - size.height, width: size.width, height: size.height + 4)
+    }
+
+    /// Something is being dragged: near the notch the island opens into the drop zone, and over it
+    /// the zone leans out to take it.
+    private func dragMoved(to point: NSPoint) {
+        guard preferences.airDrop, !model.isLocked, !model.isCurtained, !isListOpen, model.drop?.isLaunching != true else { return }
+        let near = dropReach.contains(point)
+        if near, model.drop == nil {
+            guard let parcel = dragWatcher.currentParcel(), airDrop.canSend(parcel) else { return }
+            dwellTask?.cancel()
+            collapseTask?.cancel()
+            bannerTask?.cancel()
+            withAnimation(Self.open) {
+                model.drop = DropSession(icons: parcel.icons, label: parcel.label, count: parcel.count)
+                model.banner = nil
+            }
+            if parcel.kind == .files {
+                let urls = parcel.fileURLs
+                Task { [weak self] in
+                    let thumbnails = await ParcelThumbnails.load(urls, size: 64)
+                    guard let self, self.model.drop?.label == parcel.label, !thumbnails.isEmpty else { return }
+                    self.model.drop?.icons = thumbnails
+                }
+            }
+            startWatching()
+        } else if !near, model.drop != nil {
+            endDrop()
+            return
+        }
+        guard model.drop != nil else { return }
+        let targeted = hitRect.contains(point)
+        if targeted != model.drop?.isTargeted {
+            if targeted, preferences.haptics { Haptics.tick() }
+            withAnimation(Self.hover) { model.drop?.isTargeted = targeted }
+        }
+        refreshPointer()
+    }
+
+    /// The button came up. A drop over the zone arrives a moment later; anything else just closes it.
+    private func dragEnded() {
+        dropTask?.cancel()
+        dropTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(300))
+            guard let self, !Task.isCancelled, self.model.drop?.isLaunching == false else { return }
+            self.endDrop()
+        }
+    }
+
+    private func endDrop() {
+        guard model.drop != nil else { return }
+        withAnimation(Self.close) { model.drop = nil }
+        refreshPointer()
+    }
+
+    /// Let go over the zone: the parcel rises into the camera, the island closes behind it, and
+    /// AirDrop's sheet opens out of the notch.
+    private func dropped() -> Bool {
+        guard model.drop != nil, let parcel = dragWatcher.currentParcel() else {
+            endDrop()
+            return false
+        }
+        if preferences.haptics { Haptics.confirm() }
+        dropTask?.cancel()
+        withAnimation(.spring(duration: 0.42, bounce: 0.15)) { model.drop?.isLaunching = true }
+        dropTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(420))
+            guard let self, !Task.isCancelled else { return }
+            withAnimation(Self.close) {
+                self.model.drop = nil
+                self.model.isExpanded = false
+                self.model.inlineLevel = nil
+            }
+            self.refreshPointer()
+            self.send(parcel)
+        }
+        return true
+    }
+
+    /// From the open island: files picked in a panel, or whatever was last copied.
+    private func share(from source: ShareSource) {
+        collapse()
+        switch source {
+        case .clipboard:
+            guard let parcel = ShareParcel.read(.general, readingAddresses: true) else {
+                present(.airDrop(.failed), for: .seconds(2.6))
+                return
+            }
+            send(parcel)
+        case .chooseFiles:
+            let panel = NSOpenPanel()
+            panel.allowsMultipleSelection = true
+            panel.canChooseDirectories = true
+            panel.prompt = tr("隔空投送", "AirDrop")
+            panel.message = tr("选择要隔空投送的文件。也可以直接把文件拖到刘海。", "Choose what to AirDrop. You can also drag files straight onto the notch.")
+            NSApp.activate()
+            panel.begin { [weak self] response in
+                guard response == .OK else { return }
+                let urls = panel.urls
+                MainActor.assumeIsolated { self?.send(ShareParcel(kind: .files, items: urls, fileURLs: urls)) }
+            }
+        }
+    }
+
+    private func send(_ parcel: ShareParcel) {
+        guard airDrop.send(parcel) else {
+            present(.airDrop(.failed), for: .seconds(2.6))
+            return
+        }
+        // Beside the notch while the picker opens. Not for longer: closing the picker doesn't
+        // always tell its delegate, which would leave the banner up for good. A transfer that
+        // goes through still says so when it's done.
+        present(.airDrop(.sending(label: parcel.label)), for: .seconds(4))
+    }
+
+    private func airDropFinished(_ outcome: AirDropSender.Outcome) {
+        switch outcome {
+        case .sent(let count):
+            present(.airDrop(.sent(count: count)), for: .seconds(3))
+            flash(.airDrop)
+        case .failed:
+            present(.airDrop(.failed), for: .seconds(2.6))
+        case .cancelled:
+            guard model.banner?.kind == .airDrop else { return }
+            bannerTask?.cancel()
+            withAnimation(Self.close) { model.banner = nil }
+            refreshPointer()
+        }
+    }
+
+    #if DEBUG
+    /// The drop zone as a drag of a few files would open it, for screenshots.
+    func debugDrop(targeted: Bool, launching: Bool = false) {
+        let urls = ["/System/Applications/Notes.app", "/System/Library/CoreServices/Finder.app", "/System/Applications/Preview.app"].map(URL.init(fileURLWithPath:))
+        let parcel = ShareParcel(kind: .files, items: urls, fileURLs: urls)
+        withAnimation(Self.open) {
+            model.drop = DropSession(icons: parcel.icons, label: parcel.label, count: parcel.count, isTargeted: targeted, isLaunching: launching)
+            model.banner = nil
+        }
+    }
+
+    func debugEndDrop() { endDrop() }
+
+    func debugAirDrop(_ status: AirDropStatus) {
+        present(.airDrop(status), for: .seconds(8))
+        if case .sent = status { flash(.airDrop) }
+    }
+    #endif
+
     // MARK: - Focus
 
     /// The focus blur is up: the island stays a plain notch above it, and only a task falling due or
@@ -1219,6 +1299,7 @@ final class IslandController {
                 model.cardMode = .capsule
                 model.isCardHovering = false
                 model.isHovering = false
+                model.drop = nil
                 if let banner = model.banner, !banner.passesCurtain { model.banner = nil }
             }
         }
@@ -1254,6 +1335,7 @@ final class IslandController {
                 model.cardMode = .capsule
                 model.isCardHovering = false
                 model.isHovering = false
+                model.drop = nil
             }
         }
         model.isLocked = locked
@@ -1290,9 +1372,6 @@ final class IslandController {
     }
 
     private func applyPreferences(force: Bool = false) {
-        if model.showsStatusDetail != status.prefs.islandGauges {
-            withAnimation(Self.open) { model.showsStatusDetail = status.prefs.islandGauges }
-        }
         let new = IslandPreferences.current
         let old = preferences
         guard force || new != old else { return }
@@ -1311,6 +1390,10 @@ final class IslandController {
         }
         if force || new.review != old.review {
             scheduleReview()
+        }
+        if force || new.airDrop != old.airDrop {
+            new.airDrop ? dragWatcher.start() : dragWatcher.stop()
+            if !new.airDrop { endDrop() }
         }
         if !force, new.capsuleRests != old.capsuleRests {
             // Shown whole the moment it's switched, so the change is seen; it rests again after.

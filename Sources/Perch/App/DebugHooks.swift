@@ -4,7 +4,7 @@ import PerchLine
 import SwiftUI
 
 /// Lets a script drive Perch while developing, for screenshots of states that otherwise need the
-/// pointer: `swift scripts/poke.swift status`. Debug builds only.
+/// pointer: `swift scripts/poke.swift expand`. Debug builds only.
 extension AppDelegate {
     func installDebugHooks() -> NSObjectProtocol {
         DistributedNotificationCenter.default().addObserver(forName: .init("app.perch.debug"), object: nil, queue: .main) { [weak self] note in
@@ -18,7 +18,6 @@ extension AppDelegate {
         switch parts.first {
         case "expand": island?.expand()
         case "collapse": island?.collapse()
-        case "status": island?.openStatus()
         case "close": island?.closeTaskList()
         case "line": line?.toggleLine()
         case "target": line?.targetSide = parts.dropFirst().first == "left" ? .left : .right
@@ -36,24 +35,27 @@ extension AppDelegate {
             island?.taskPanel.tab = .focus
             model.tab = .focus
             openTasks(focusInput: false)
-        case "page": island?.showPage(parts.dropFirst().first == "status" ? .status : .main)
-        case "metric":
-            let metric: StatusMetric = switch parts.dropFirst().first {
-            case "memory": .memory
-            case "temperature": .temperature
-            case "network": .network
-            default: .cpu
-            }
-            island?.model.metricHandler?(metric)
         case "focus": focus.startSession()
         case "unlock": focus.debugUnlock()
         case "schedules": SchedulesRouter.shared.edit(ScheduleStore.shared.rules.first?.id)
         case "settings":
             let tab = parts.dropFirst().first.flatMap { name in SettingsTab.allCases.first { "\($0)" == name } } ?? .general
             showSettings(tab)
-        case "alert":
-            _ = island?.showAlert(SystemAlert(id: "debug", kind: .hot, title: tr("CPU 温度 96°C", "CPU at 96°C"),
-                                              detail: tr("已经持续一分钟以上处于高温，可以看看是哪个进程在满负荷运行。", "It has been this hot for over a minute.")))
+        case "drop":
+            // drop[:over|:launch|:end]: the AirDrop drop zone as a drag would open it.
+            switch parts.dropFirst().first {
+            case "over": island?.debugDrop(targeted: true)
+            case "launch": island?.debugDrop(targeted: true, launching: true)
+            case "end": island?.debugEndDrop()
+            default: island?.debugDrop(targeted: false)
+            }
+        case "airdrop":
+            // airdrop[:sent|:failed]: the AirDrop banner beside the notch.
+            switch parts.dropFirst().first {
+            case "sent": island?.debugAirDrop(.sent(count: 3))
+            case "failed": island?.debugAirDrop(.failed)
+            default: island?.debugAirDrop(.sending(label: tr("3 个文件", "3 files")))
+            }
         case "review": island?.debugReview()
         case "remind":
             // remind[:start]: the first timed open task's reminder, as the island would show it.
@@ -62,7 +64,6 @@ extension AppDelegate {
             switch parts.dropFirst().first {
             case "celebration": island?.celebrate()
             case "low": island?.debugGlow(.lowBattery)
-            case "alert": island?.debugGlow(.alert)
             default: island?.debugGlow(.charging)
             }
         case "snapglow":

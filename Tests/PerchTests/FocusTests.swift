@@ -172,19 +172,6 @@ struct UnlockPhraseTests {
     }
 }
 
-struct StatusFormatTests {
-    @Test func compactRatesForTheMenuBar() {
-        #expect(Fmt.compactRate(950) == "950B")
-        #expect(Fmt.compactRate(1_234) == "1.2K")
-        #expect(Fmt.compactRate(12_345_678) == "12M")
-    }
-
-    @Test func bytesInDecimalLikeFinder() {
-        #expect(Fmt.bytesParts(1_500_000) == ("1.50", "MB"))
-        #expect(Fmt.bytesParts(265_000_000_000) == ("265", "GB"))
-    }
-}
-
 struct AppleAudioModelTests {
     @Test func airPodsGenerationsGetTheirOwnSymbols() {
         #expect(AppleAudioModel.symbol(for: 0x2013) == "airpods.gen3")

@@ -1,3 +1,4 @@
+import AppKit
 import CoreGraphics
 import Foundation
 import ImageIO
@@ -136,6 +137,48 @@ struct IslandModelTests {
         #expect(expanded.height > drop.height)
         #expect(tasks.height > expanded.height)
         #expect(model.windowSize.width > tasks.width && model.windowSize.height > tasks.height)
+    }
+}
+
+@MainActor
+struct AirDropTests {
+    private func board(_ fill: (NSPasteboard) -> Void) -> NSPasteboard {
+        let board = NSPasteboard(name: .init("perch.test.\(UUID().uuidString)"))
+        board.clearContents()
+        fill(board)
+        return board
+    }
+
+    @Test func filesComeFirst() {
+        let urls = [URL(fileURLWithPath: "/tmp/a.png"), URL(fileURLWithPath: "/tmp/b.pdf")]
+        let parcel = ShareParcel.read(board { $0.writeObjects(urls as [NSURL]) })
+        #expect(parcel?.kind == .files)
+        #expect(parcel?.count == 2)
+        #expect(parcel?.label == tr("2 个文件", "2 files"))
+    }
+
+    @Test func aLinkIsNamedForItsSite() {
+        let parcel = ShareParcel.read(board { $0.writeObjects([URL(string: "https://www.apple.com/airdrop")! as NSURL]) })
+        #expect(parcel?.kind == .link)
+        #expect(parcel?.label == "apple.com")
+    }
+
+    @Test func copiedAddressesCountButWordsDont() {
+        let address = board { $0.setString("  https://github.com/fancyecho \n", forType: .string) }
+        #expect(ShareParcel.read(address) == nil)
+        #expect(ShareParcel.read(address, readingAddresses: true)?.kind == .link)
+        let words = board { $0.setString("see you at nine", forType: .string) }
+        #expect(ShareParcel.read(words, readingAddresses: true) == nil)
+    }
+
+    @Test func theDropZoneLeansTowardAParcelAndFitsTheWindow() {
+        let model = IslandModel(geometry: NotchGeometry(screen: nil))
+        let resting = model.layout(for: .drop, hovering: false)
+        model.drop = DropSession(icons: [], label: "a.png", count: 1, isTargeted: true)
+        let leaning = model.layout(for: .drop, hovering: false)
+        #expect(model.state == .drop)
+        #expect(leaning.width > resting.width)
+        #expect(model.windowSize.width > leaning.width)
     }
 }
 
@@ -286,11 +329,9 @@ struct TaskCapsuleTests {
         #expect(model.cardSize == IslandModel.panelSize)
     }
 
-    /// Opened from under the status page, the panel used to hang past the window's bottom edge,
+    /// Opened from under the open island, the panel used to hang past the window's bottom edge,
     /// hiding its last rows; it now always fits, whatever it was pinned to.
     @Test func openPanelNeverHangsOutOfTheWindow() {
-        model.showsStatusDetail = true
-        model.page = .status
         model.isExpanded = true
         model.pinnedCardTop = model.cardTop
         model.cardMode = .panel

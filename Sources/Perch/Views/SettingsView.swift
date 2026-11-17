@@ -400,6 +400,7 @@ private struct IslandPane: View {
     @AppStorage(Pref.islandBattery) private var battery = true
     @AppStorage(Pref.islandReminders) private var reminders = true
     @AppStorage(Pref.islandHaptics) private var haptics = true
+    @AppStorage(Pref.islandAirDrop) private var airDrop = true
     @AppStorage(Pref.hudColorful) private var hudColorful = true
     @AppStorage(Pref.hudShowsValue) private var hudShowsValue = false
     @AppStorage(Pref.hudDuration) private var hudDuration = 1.6
@@ -420,6 +421,15 @@ private struct IslandPane: View {
                     Toggle(tr("充电与电量", "Charging & battery"), isOn: $battery)
                     Toggle(tr("在刘海显示任务提醒", "Show task reminders at the notch"), isOn: $reminders)
                 }
+                Section {
+                    Toggle(isOn: $airDrop) {
+                        SettingLabel(tr("拖到刘海隔空投送", "Drop on the notch to AirDrop"),
+                                     tr("把文件、图片或链接拖向刘海，灵动岛会张开接住，松手就打开隔空投送。展开灵动岛、没在播放时，也能选文件或投送刚复制的内容。",
+                                        "Drag files, images or links toward the notch and the island opens to catch them; let go to AirDrop them. With nothing playing, the open island can also send files you choose or what you just copied."))
+                    }
+                } header: {
+                    Text(tr("隔空投送", "AirDrop"))
+                }
                 Section(tr("音量与亮度提示", "Volume & brightness")) {
                     Toggle(tr("显示音量与亮度提示", "Show volume & brightness"), isOn: $levels)
                     if levels {
@@ -437,7 +447,6 @@ private struct IslandPane: View {
                     }
                 }
             }
-            StatusSections(islandEnabled: enabled)
         }
     }
 }
@@ -474,9 +483,11 @@ private struct HelpPane: View {
             Section(tr("灵动岛", "Island")) {
                 ReferenceRow(example: tr("在刘海上双指左右滑", "Two-finger swipe sideways on the notch"), meaning: tr("下一首 / 上一首", "Next / previous track"))
                 ReferenceRow(example: tr("在刘海上双指下滑", "Two-finger swipe down on the notch"), meaning: tr("展开", "Open"))
-                ReferenceRow(example: tr("展开后双指上下滑 · 滚动鼠标滚轮 · 点边上的圆点", "Once open, swipe up / down · scroll the wheel · the dots at the edge"), meaning: tr("切换正在播放 / 系统状态", "Switch Now Playing / Status"))
+                ReferenceRow(example: tr("展开后双指上滑 · 向上滚动鼠标滚轮", "Once open, swipe up · scroll the wheel up"), meaning: tr("收起", "Close"))
                 ReferenceRow(example: settings.islandHotKey?.displayString ?? tr("通用里设置的快捷键", "The shortcut set in General"), meaning: tr("展开 / 收起灵动岛", "Open / close the island"))
                 ReferenceRow(example: tr("在胶囊上双指右滑 / 左滑", "Two-finger swipe right / left on the capsule"), meaning: tr("完成 / 推迟到明天", "Complete / move to tomorrow"))
+                ReferenceRow(example: tr("把文件、图片或链接拖到刘海上松手", "Drag files, images or links onto the notch and let go"), meaning: tr("隔空投送", "AirDrop"))
+                ReferenceRow(example: tr("没在播放时展开刘海 › 隔空投送 · 投送剪贴板", "Open the notch with nothing playing › AirDrop · Send clipboard"), meaning: tr("选文件投送 · 投送刚复制的内容", "Send files you pick · send what you copied"))
                 ReferenceRow(example: tr("右键刘海或胶囊", "Right-click the notch or capsule"), meaning: tr("菜单与设置", "Menu & settings"))
             }
 
@@ -496,11 +507,6 @@ private struct HelpPane: View {
                 ReferenceRow(example: tr("访达里右键图片 › 服务 › Hang on Perch", "In Finder, right-click an image › Services › Hang on Perch"), meaning: tr("把任意图片挂上绳", "Hang any image on the line"))
                 ReferenceRow(example: tr("指针停在菜单栏中间一半（灵动岛两侧）· ⌃⌥T", "Rest in the middle half of the menu bar, beside the island · ⌃⌥T"), meaning: tr("放下 / 收起晾衣绳", "Bring the line down / put it away"))
                 ReferenceRow(example: tr("点两段绳中间的标签 · 右键照片 › 挪到…", "Click a label between the lines · right-click a photo › Move to…"), meaning: tr("新截图改挂到这段 · 挪到另一段", "Hang new screenshots there · move to the other line"))
-            }
-
-            Section(tr("状态", "Status")) {
-                ReferenceRow(example: tr("展开灵动岛后上下滑 · 点菜单栏读数", "Swipe the open island up or down · click the menu bar readout"), meaning: tr("系统状态", "System status"))
-                ReferenceRow(example: tr("点 CPU、内存、网络的读数", "Click the CPU, memory or network gauge"), meaning: tr("看它最近两分钟的曲线", "Its last two minutes"))
             }
         }
     }

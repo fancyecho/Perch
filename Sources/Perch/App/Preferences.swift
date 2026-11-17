@@ -42,6 +42,7 @@ enum Pref {
     /// Where today's tasks show while the island is on (see TaskStyle).
     static let islandTaskStyle = "islandTaskStyle"
     static let islandHaptics = "islandHaptics"
+    static let islandAirDrop = "islandAirDrop"
     static let islandAskedAccessibility = "islandAskedAccessibility"
     /// Volume and brightness bars take the level's color (green to orange) instead of plain white.
     static let hudColorful = "hudColorful"
@@ -88,6 +89,7 @@ enum Pref {
             islandReminders: true,
             islandTaskStyle: TaskStyle.capsule.rawValue,
             islandHaptics: true,
+            islandAirDrop: true,
             hudColorful: true,
             hudShowsValue: false,
             hudDuration: 1.6,

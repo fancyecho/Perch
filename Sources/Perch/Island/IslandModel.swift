@@ -46,6 +46,11 @@ enum TaskStyle: String, CaseIterable {
     }
 }
 
+/// Where something to send by AirDrop comes from, besides a drag.
+enum ShareSource {
+    case chooseFiles, clipboard
+}
+
 /// The glass card under the island: the capsule (capsule style), and what it opens into.
 enum CardMode: Equatable {
     case capsule, peek, panel
@@ -56,11 +61,6 @@ enum CardMode: Equatable {
 /// capsule; going to sleep runs the same way back.
 enum CardRest: Equatable {
     case awake, stretched, asleep
-}
-
-/// The detail under the status page's gauges.
-enum StatusMetric: Equatable {
-    case cpu, memory, temperature, network
 }
 
 enum LevelKind: Equatable {
@@ -84,12 +84,12 @@ enum IslandBanner: Equatable {
     case route(AudioRoute)
     case track
     case reminder(Reminder, next: TaskItem?, alsoDue: Int)
-    case alert(SystemAlert)
     /// The evening review: how many of today's tasks are still open.
     case review(count: Int)
+    case airDrop(AirDropStatus)
 
     enum Kind: Equatable {
-        case level, device, power, route, track, reminder, alert, review
+        case level, device, power, route, track, reminder, review, airDrop
     }
 
     /// Banners of the same kind update in place instead of closing and reopening.
@@ -101,8 +101,8 @@ enum IslandBanner: Equatable {
         case .route: .route
         case .track: .track
         case .reminder: .reminder
-        case .alert: .alert
         case .review: .review
+        case .airDrop: .airDrop
         }
     }
 
@@ -120,7 +120,7 @@ enum IslandBanner: Equatable {
     var passesCurtain: Bool {
         switch kind {
         case .level, .reminder: true
-        case .device, .power, .route, .track, .alert, .review: false
+        case .device, .power, .route, .track, .review, .airDrop: false
         }
     }
 
@@ -128,10 +128,29 @@ enum IslandBanner: Equatable {
     /// to say drop down below it.
     var dropsDown: Bool {
         switch kind {
-        case .track, .reminder, .alert, .review: true
-        case .level, .device, .power, .route: false
+        case .track, .reminder, .review: true
+        case .level, .device, .power, .route, .airDrop: false
         }
     }
+}
+
+/// How a parcel sent by AirDrop is getting on.
+enum AirDropStatus: Equatable {
+    /// The device picker is open, or the transfer under way.
+    case sending(label: String)
+    case sent(count: Int)
+    case failed
+}
+
+/// Something dragged up to the island to send by AirDrop.
+struct DropSession: Equatable {
+    var icons: [NSImage]
+    var label: String
+    var count: Int
+    /// Over the island itself, where letting go sends it.
+    var isTargeted = false
+    /// Let go: the parcel rises into the camera before the AirDrop sheet opens.
+    var isLaunching = false
 }
 
 /// What sits in the wings beside the notch while nothing else is going on.
@@ -162,26 +181,9 @@ struct LiveActivity: Equatable {
     }
 }
 
-/// The open island's pages, one above the other: what's playing (or today's tasks in merged
-/// style), then the Mac's status. A two-finger swipe moves between them.
-enum IslandPage: Equatable {
-    case main, status
-
-    /// The pages there are right now. Without anything playing (or tasks inside the island) the
-    /// status is the only page; on the lock screen only the first one shows.
-    static func available(hasMain: Bool, gauges: Bool, locked: Bool) -> [IslandPage] {
-        if locked { return [hasMain ? .main : .status] }
-        var pages: [IslandPage] = hasMain ? [.main] : []
-        if gauges || !hasMain { pages.append(.status) }
-        return pages
-    }
-}
-
 /// A light that passes once along the island's lower lip.
 enum IslandGlow: Equatable {
-    case charging, celebration, lowBattery
-    /// Something about the Mac needs a look: running hot, short of memory or disk.
-    case alert
+    case charging, celebration, lowBattery, airDrop
 }
 
 enum IslandState: Equatable {
@@ -191,6 +193,8 @@ enum IslandState: Equatable {
     case live(LiveActivity)
     case banner(IslandBanner)
     case expanded
+    /// A drag on its way to AirDrop.
+    case drop
     /// The full task list, grown down out of the notch.
     case tasks
 }
@@ -224,6 +228,8 @@ final class IslandModel {
     static let expandedExtraWidth: CGFloat = 180
     static let expandedDrop: CGFloat = 144
     static let playerDrop: CGFloat = 100
+    /// The drop zone: the open island's width, a little shorter.
+    static let dropDrop: CGFloat = 92
     /// The task list under the notch; the panel view itself is 368 wide.
     static let taskPanel = CGSize(width: 372, height: 528)
     static let windowMargin: CGFloat = 40
@@ -244,10 +250,6 @@ final class IslandModel {
     static let barReach = CGSize(width: 110, height: 22)
     static let peekRowHeight: CGFloat = 34
     static let panelSize = CGSize(width: 368, height: 560)
-    /// The open island on its status page: gauges and a detail strip under them.
-    static let statusDrop: CGFloat = 174
-    /// The status page is a little wider than the player, so its four gauges have room.
-    static let statusExtraWidth: CGFloat = 36
 
     var geometry: NotchGeometry
     var isExpanded = false
@@ -275,16 +277,11 @@ final class IslandModel {
     /// Another app has a menu open; the island's space sits above menus, so the capsule steps aside.
     var isMenuOpen = false
     var glow: IslandGlow?
+    var drop: DropSession?
     /// A sideways kick of the artwork when a swipe changes the track: -1 left, 1 right.
     var mediaNudge: CGFloat = 0
     /// How far the capsule's task has been swiped: right completes, left moves it to tomorrow.
     var capsuleSwipe: CGFloat = 0
-    var statusMetric = StatusMetric.cpu
-    /// The status page has its gauges and details (Settings › Status).
-    var showsStatusDetail = true
-    var page = IslandPage.main
-    /// The last page change went to the page below, so the new one comes up from the bottom.
-    var pageMovesForward = true
 
     @ObservationIgnored var expandHandler: (() -> Void)?
     @ObservationIgnored var levelHandler: ((LevelKind, Double) -> Void)?
@@ -292,13 +289,10 @@ final class IslandModel {
     /// Opens the full task list; true also focuses the new-task field.
     @ObservationIgnored var tasksHandler: ((Bool) -> Void)?
     @ObservationIgnored var settingsHandler: ((SettingsTab) -> Void)?
-    /// Shows a gauge's detail on the status page.
-    @ObservationIgnored var metricHandler: ((StatusMetric) -> Void)?
-    /// Moves the open island to a page.
-    @ObservationIgnored var pageHandler: ((IslandPage) -> Void)?
-    /// The action on an alert banner: quit the runaway process, or look at the status.
-    @ObservationIgnored var alertHandler: ((SystemAlert) -> Void)?
     @ObservationIgnored var reviewHandler: (() -> Void)?
+    /// Something was let go over the drop zone.
+    @ObservationIgnored var dropHandler: (() -> Bool)?
+    @ObservationIgnored var shareHandler: ((ShareSource) -> Void)?
 
     init(geometry: NotchGeometry) {
         self.geometry = geometry
@@ -306,6 +300,7 @@ final class IslandModel {
 
     var state: IslandState {
         if isShowingTasks { return .tasks }
+        if drop != nil { return .drop }
         if isExpanded { return .expanded }
         if let banner { return .banner(banner) }
         if let live { return .live(live) }
@@ -333,9 +328,13 @@ final class IslandModel {
             return IslandLayout(body: CGSize(width: notch.width + Self.bannerWing * 2, height: notch.height), shoulder: 6, cornerRadius: 12, shadowOpacity: 0.3)
         case .expanded:
             // Tasks stay off the lock screen, so there it's only ever the player.
-            let drop = page == .status && showsStatusDetail ? Self.statusDrop : taskStyle == .merged && !isLocked ? Self.expandedDrop : Self.playerDrop
-            let wider = page == .status && showsStatusDetail ? Self.statusExtraWidth : 0
-            return IslandLayout(body: CGSize(width: max(notch.width + Self.expandedExtraWidth, 340) + wider, height: notch.height + drop), shoulder: 12, cornerRadius: 26, shadowOpacity: 0.55)
+            let drop = taskStyle == .merged && !isLocked ? Self.expandedDrop : Self.playerDrop
+            return IslandLayout(body: CGSize(width: max(notch.width + Self.expandedExtraWidth, 340), height: notch.height + drop), shoulder: 12, cornerRadius: 26, shadowOpacity: 0.55)
+        case .drop:
+            // It leans toward a parcel held over it.
+            let grow: CGFloat = drop?.isTargeted == true ? 14 : 0
+            return IslandLayout(body: CGSize(width: max(notch.width + Self.expandedExtraWidth, 340) + grow, height: notch.height + Self.dropDrop + grow / 2),
+                                shoulder: 12, cornerRadius: 26, shadowOpacity: 0.55)
         case .tasks:
             return IslandLayout(body: CGSize(width: Self.taskPanel.width, height: notch.height + Self.taskPanel.height), shoulder: 14, cornerRadius: 30, shadowOpacity: 0.55)
         }
@@ -344,11 +343,13 @@ final class IslandModel {
     /// Big enough for the largest form, and for the task panel hanging below the tallest banner,
     /// plus room for shadows.
     var windowSize: CGSize {
-        let forms: [IslandState] = [.expanded, .tasks, .banner(.track), .banner(.route(.speakers))]
+        let forms: [IslandState] = [.expanded, .drop, .tasks, .banner(.track), .banner(.route(.speakers))]
         let layouts = forms.map { layout(for: $0, hovering: false) }
+        // The drop zone leans out a little further toward a parcel held over it.
+        let widest = max(layouts.map(\.width).max() ?? 0, layout(for: .drop, hovering: false).width + 14)
         let lowestCardTop = layout(for: .banner(.track), hovering: false).height + Self.capsuleGap
         return CGSize(
-            width: max(layouts.map(\.width).max() ?? 0, Self.panelSize.width) + Self.windowMargin * 2,
+            width: max(widest, Self.panelSize.width) + Self.windowMargin * 2,
             height: max(layouts.map(\.height).max() ?? 0, lowestCardTop + Self.panelSize.height) + Self.windowMargin
         )
     }

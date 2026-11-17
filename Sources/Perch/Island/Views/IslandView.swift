@@ -44,13 +44,15 @@ private struct IslandShape: View {
             }
             .opacity(layout.isHidden ? 0 : 1)
             .contentShape(shape)
+            // Something dragged up to the notch, to send by AirDrop.
+            .onDrop(of: [.fileURL, .url, .image], isTargeted: nil) { _ in model.dropHandler?() ?? false }
             .onTapGesture { model.expand() }
             .contextMenu { IslandMenu() }
     }
 }
 
 /// A light that passes once along the island's lower lip: green when charging starts, a spectrum
-/// when today is cleared, red when the battery runs low, amber for an alert. It keeps to the rounded
+/// when today is cleared, red when the battery runs low, blue when something has gone by AirDrop. It keeps to the rounded
 /// bottom, where the island meets the screen, and never reaches the flat top or its pointed shoulders.
 private struct GlowRing: View {
     let glow: IslandGlow
@@ -84,7 +86,7 @@ struct GlowLight: View, Animatable {
         case .charging: [Color(red: 0.35, green: 0.95, blue: 0.6), Color(red: 0.55, green: 1, blue: 0.75)]
         case .celebration: [.pink, .orange, .yellow, .green, .cyan, .blue, .purple]
         case .lowBattery: [Color(red: 1, green: 0.32, blue: 0.3), Color(red: 1, green: 0.5, blue: 0.35)]
-        case .alert: [Color(red: 1, green: 0.62, blue: 0.2), Color(red: 1, green: 0.78, blue: 0.3)]
+        case .airDrop: [AirDropColor.deep, AirDropColor.light]
         }
     }
 
@@ -194,6 +196,12 @@ private struct IslandContent: View {
                 ExpandedIslandView()
                     .frame(width: size.width, height: size.height)
                     .transition(.materialize)
+            case .drop:
+                if let session = model.drop {
+                    DropZoneView(session: session)
+                        .frame(width: size.width, height: size.height)
+                        .transition(.materialize)
+                }
             case .tasks:
                 IslandTaskList()
                     .frame(width: size.width, height: size.height)
